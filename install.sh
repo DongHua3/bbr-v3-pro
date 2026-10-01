@@ -394,8 +394,64 @@ gh_api_get() {
     fi
 }
 
+version_ge() {
+    local current="$1"
+    local required="$2"
+    [[ "$(printf '%s\n' "$required" "$current" | sort -V | head -n 1)" == "$required" ]]
+}
+
+debian_version_from_codename() {
+    case "${1:-}" in
+        bookworm) echo "12" ;;
+        trixie) echo "13" ;;
+        forky) echo "14" ;;
+        sid|unstable) echo "999" ;;
+        *) return 1 ;;
+    esac
+}
+
+assert_supported_kernel_install_system() {
+    if [[ ! -r /etc/os-release ]]; then
+        log_error "无法识别当前系统版本，已拒绝安装主线内核。"
+        return 1
+    fi
+    local os_id="" os_version="" os_codename="" os_name="" min_version="" distro_name=""
+    . /etc/os-release
+    os_id="${ID:-}"
+    os_version="${VERSION_ID:-}"
+    os_codename="${VERSION_CODENAME:-${UBUNTU_CODENAME:-}}"
+    os_name="${PRETTY_NAME:-${NAME:-未知系统}}"
+
+    case "$os_id" in
+        ubuntu)
+            min_version="22.04"
+            distro_name="Ubuntu"
+            ;;
+        debian)
+            min_version="12"
+            distro_name="Debian"
+            if [[ -z "$os_version" ]]; then
+                os_version="$(debian_version_from_codename "$os_codename" || true)"
+            fi
+            ;;
+        *)
+            log_error "当前系统为 $os_name，不在主线内核安装白名单内。"
+            log_warn "最低要求支持: Ubuntu 22.04+ / Debian 12+，以避免旧系统引导链路导致 kernel panic。"
+            return 1
+            ;;
+    esac
+
+    if [[ -z "$os_version" ]] || ! version_ge "$os_version" "$min_version"; then
+        log_error "当前系统版本过旧: $os_name。已拒绝安装主线内核。"
+        log_warn "最低要求: ${distro_name} ${min_version}+。请先升级系统后再运行。"
+        return 1
+    fi
+    return 0
+}
+
 install_bbrv3_kernel() {
     local profile="${1:-standard}"
+    assert_supported_kernel_install_system || return 1
     log_info "正在从 GitHub 获取 [$GITHUB_REPO] 最新发布的内核版本..."
 
     local base_url="https://api.github.com/repos/${GITHUB_REPO}/releases"
@@ -452,7 +508,7 @@ install_bbrv3_kernel() {
     done
 
     log_info "正在安全安装新内核 (保留旧内核作为救援保底)..."
-    if sudo dpkg -i "$workdir"/linux-*.deb; then
+    if sudo dpkg -i "$workdir"/linux-*.deb || sudo apt-get install -f -y; then
         log_info "正在更新 GRUB 引导记录..."
         if command -v update-grub &>/dev/null; then
             sudo update-grub
