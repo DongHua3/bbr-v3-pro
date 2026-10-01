@@ -1,0 +1,323 @@
+name: 构建带有BBRv3的内核
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Daily automatic kernel refresh. BBRv3 itself stays pinned to the repo patch.
+    - cron: "17 3 * * *"
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  GH_REPO: ${{ github.repository }}
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: bbrv3-kernel-build
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      kernel_version: ${{ steps.plan.outputs.kernel_version }}
+      raw_kernel_version: ${{ steps.plan.outputs.raw_kernel_version }}
+      build_needed: ${{ steps.plan.outputs.build_needed }}
+    steps:
+      - name: 检查最新内核和已发布版本
+        id: plan
+        run: |
+          set -euo pipefail
+
+          raw_version=$(curl -fsSL https://www.kernel.org/finger_banner \
+            | awk -F: '/latest stable version/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}')
+          if [ -z "$raw_version" ]; then
+            echo "Failed to read latest stable kernel version from kernel.org." >&2
+            exit 1
+          fi
+
+          version="$raw_version"
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            version="${version}.0"
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Unexpected stable kernel version: $raw_version" >&2
+            exit 1
+          fi
+
+          echo "raw_kernel_version=$raw_version" >> "$GITHUB_OUTPUT"
+          echo "kernel_version=$version" >> "$GITHUB_OUTPUT"
+
+          missing=0
+          for arch in x86_64 arm64; do
+            for suffix in "" "-max"; do
+              tag="$arch-$version$suffix"
+              if gh release view "$tag" >/dev/null 2>&1; then
+                echo "$tag already exists."
+              else
+                echo "$tag is missing."
+                missing=1
+              fi
+            done
+          done
+
+          if [ "$missing" -eq 0 ]; then
+            echo "build_needed=false" >> "$GITHUB_OUTPUT"
+            echo "All releases for $version already exist; ending workflow before build."
+          else
+            echo "build_needed=true" >> "$GITHUB_OUTPUT"
+            echo "At least one release for $version is missing; build will continue."
+          fi
+
+  cleanup:
+    needs: preflight
+    if: needs.preflight.outputs.build_needed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 删除旧的工作流运行记录
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          retain_days: 0
+          keep_minimum_runs: 0
+
+  build:
+    needs: [preflight, cleanup]
+    if: ${{ always() && needs.preflight.outputs.build_needed == 'true' && needs.cleanup.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runs_on: ubuntu-latest
+            profile: standard
+            profile_name: BBRv3
+            release_suffix: ""
+            localversion: -bbrv3
+          - arch: arm64
+            runs_on: ubuntu-24.04-arm
+            profile: standard
+            profile_name: BBRv3
+            release_suffix: ""
+            localversion: -bbrv3
+          - arch: x86_64
+            runs_on: ubuntu-latest
+            profile: max
+            profile_name: BBRv3 Max
+            release_suffix: -max
+            localversion: -bbrv3-max
+          - arch: arm64
+            runs_on: ubuntu-24.04-arm
+            profile: max
+            profile_name: BBRv3 Max
+            release_suffix: -max
+            localversion: -bbrv3-max
+    runs-on: ${{ matrix.runs_on }}
+    env:
+      ARCH: ${{ matrix.arch }}
+      KERNEL_VERSION: ${{ needs.preflight.outputs.kernel_version }}
+    steps:
+      - name: 检查是否已发布
+        id: check_release
+        run: |
+          tag="${{ matrix.arch }}-${{ env.KERNEL_VERSION }}${{ matrix.release_suffix }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "BUILD_NEEDED=false" >> "$GITHUB_ENV"
+            echo "$tag already exists; skipping build."
+          else
+            echo "BUILD_NEEDED=true" >> "$GITHUB_ENV"
+            echo "$tag does not exist; building latest kernel with ${{ matrix.profile_name }}."
+          fi
+
+      - name: 检出代码
+        if: env.BUILD_NEEDED == 'true'
+        uses: actions/checkout@v4
+
+      - name: 安装依赖项
+        if: env.BUILD_NEEDED == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git build-essential \
+            libncurses-dev libssl-dev libelf-dev \
+            bison bc flex rsync debhelper \
+            dpkg-dev fakeroot kmod cpio dwarves \
+            libdw-dev lz4 zstd xz-utils curl jq
+
+      - name: 创建源码目录
+        if: env.BUILD_NEEDED == 'true'
+        run: mkdir -p ./kernel/linux
+
+      - name: 下载内核源代码
+        if: env.BUILD_NEEDED == 'true'
+        working-directory: ./kernel
+        run: |
+          branch=$(echo "${{ env.KERNEL_VERSION }}" | grep -oP '^\d+\.\d+')
+          git clone --depth=1 --branch linux-$branch.y \
+            https://github.com/gregkh/linux.git linux
+
+      - name: 应用 BBRv3 补丁
+        if: env.BUILD_NEEDED == 'true'
+        working-directory: ./kernel/linux
+        run: |
+          bash "$GITHUB_WORKSPACE/scripts/apply-bbrv3-port.sh"
+          grep -n "BBR_VERSION" net/ipv4/tcp_bbr.c
+
+      - name: 应用 BBRv3 Max 极限内核配置
+        if: env.BUILD_NEEDED == 'true' && matrix.profile == 'max'
+        working-directory: ./kernel/linux
+        run: |
+          bash "$GITHUB_WORKSPACE/scripts/apply-bbrv3-max-profile.sh"
+
+      - name: 编译声明
+        if: env.BUILD_NEEDED == 'true'
+        working-directory: ./kernel/linux
+        run: |
+          grep -v "MODULE_DESCRIPTION" net/ipv4/tcp_bbr.c > net/ipv4/tcp_bbr.c.tmp
+          mv net/ipv4/tcp_bbr.c.tmp net/ipv4/tcp_bbr.c
+
+          if [ "${{ matrix.profile }}" = "max" ]; then
+            echo 'MODULE_DESCRIPTION("TCP BBR v3 Max - aggressive throughput profile");' >> net/ipv4/tcp_bbr.c
+          else
+            echo 'MODULE_DESCRIPTION("TCP BBR v3 (Bottleneck Bandwidth and RTT)");' >> net/ipv4/tcp_bbr.c
+          fi
+          
+          tail -n 5 net/ipv4/tcp_bbr.c
+
+      - name: 更新 Makefile 中的版本号
+        if: env.BUILD_NEEDED == 'true'
+        working-directory: ./kernel/linux
+        run: |
+          IFS='.' read -r v p s <<< "${{ env.KERNEL_VERSION }}"
+          sed -i "s/^VERSION *=.*/VERSION = $v/" Makefile
+          sed -i "s/^PATCHLEVEL *=.*/PATCHLEVEL = $p/" Makefile
+          sed -i "s/^SUBLEVEL *=.*/SUBLEVEL = $s/" Makefile
+
+      - name: 准备 .config 并禁用证书检查
+        if: env.BUILD_NEEDED == 'true'
+        timeout-minutes: 8
+        working-directory: ./kernel/linux
+        run: |
+          bash "$GITHUB_WORKSPACE/scripts/prepare-kernel-config.sh" "${{ matrix.arch }}"
+
+      - name: 上传最终配置文件
+        if: env.BUILD_NEEDED == 'true' && matrix.profile == 'standard'
+        uses: actions/upload-artifact@v4
+        with:
+          name: config-${{ matrix.arch }}-${{ matrix.profile }}-${{ env.KERNEL_VERSION }}
+          path: ./build-configs/${{ matrix.arch }}*.config
+
+      - name: 构建内核 Debian 包
+        if: env.BUILD_NEEDED == 'true'
+        working-directory: ./kernel/linux
+        run: |
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            make ARCH=arm64 bindeb-pkg -j$(nproc) LOCALVERSION=${{ matrix.localversion }} KDEB_COMPRESS=gzip skipdbg=true
+          else
+            make bindeb-pkg -j$(nproc) LOCALVERSION=${{ matrix.localversion }} KDEB_COMPRESS=gzip skipdbg=true
+          fi
+
+      - name: 检查 deb 包
+        if: env.BUILD_NEEDED == 'true'
+        run: |
+          if find ./kernel -maxdepth 1 \( -name '*-dbg*.deb' -o -name '*-dbgsym*.deb' \) | grep -q .; then
+            echo "ERROR: debug deb package was generated."
+            find ./kernel -maxdepth 1 \( -name '*-dbg*.deb' -o -name '*-dbgsym*.deb' \) -print
+            exit 1
+          fi
+          find ./kernel -maxdepth 1 -name 'linux-*.deb' -print | sort
+
+      - name: 发布前复查是否已发布
+        if: env.BUILD_NEEDED == 'true'
+        run: |
+          tag="${{ matrix.arch }}-${KERNEL_VERSION}${{ matrix.release_suffix }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "PUBLISH_NEEDED=false" >> "$GITHUB_ENV"
+            echo "$tag was published while this job was running; skipping upload and release."
+          else
+            echo "PUBLISH_NEEDED=true" >> "$GITHUB_ENV"
+            mkdir -p ./publish-markers
+            touch "./publish-markers/${{ matrix.arch }}-${{ matrix.profile }}"
+            echo "$tag still missing; publishing this build."
+          fi
+
+      - name: 上传发布标记
+        if: env.BUILD_NEEDED == 'true' && env.PUBLISH_NEEDED == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: publish-${{ matrix.arch }}-${{ matrix.profile }}-${{ env.KERNEL_VERSION }}
+          path: ./publish-markers/${{ matrix.arch }}-${{ matrix.profile }}
+
+      - name: 上传 deb 包
+        if: env.BUILD_NEEDED == 'true' && env.PUBLISH_NEEDED == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.arch }}-${{ matrix.profile }}
+          path: ./kernel/linux-*.deb
+
+      - name: 发布到 GitHub Release
+        if: env.BUILD_NEEDED == 'true' && env.PUBLISH_NEEDED == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ matrix.arch }}-${{ env.KERNEL_VERSION }}${{ matrix.release_suffix }}
+          files: |
+            ./kernel/linux-*.deb
+            ./build-configs/${{ matrix.arch }}-${{ env.KERNEL_VERSION }}.config
+          body: "带有 ${{ matrix.profile_name }} 的最新内核，适用于 ${{ matrix.arch }} 架构。"
+
+  update-config-baseline:
+    needs: [preflight, build]
+    if: ${{ always() && needs.preflight.outputs.build_needed == 'true' && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载本轮最终配置
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: config-*-standard-*
+          path: ./generated-configs
+          merge-multiple: true
+
+      - name: 下载发布标记
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: publish-*-standard-*
+          path: ./publish-markers
+          merge-multiple: true
+
+      - name: 回写配置基线
+        run: |
+          set -euxo pipefail
+          if [ ! -d ./publish-markers ] || ! find ./publish-markers -type f | grep -q .; then
+            echo "No published architectures found; skipping baseline update."
+            exit 0
+          fi
+
+          if [ ! -f ./generated-configs/x86_64.config ] && [ ! -f ./generated-configs/arm64.config ]; then
+            echo "No generated configs found; nothing to update."
+            exit 0
+          fi
+
+          if [ -f ./publish-markers/x86_64-standard ] && [ -f ./generated-configs/x86_64.config ]; then
+            cp ./generated-configs/x86_64.config ./x86-64.config
+          fi
+          if [ -f ./publish-markers/arm64-standard ] && [ -f ./generated-configs/arm64.config ]; then
+            cp ./generated-configs/arm64.config ./arm64.config
+          fi
+
+          if git diff --quiet -- x86-64.config arm64.config; then
+            echo "Generated configs match current baselines."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add x86-64.config arm64.config
+          git commit -m "Refresh generated kernel config baselines [skip ci]"
+          git push
