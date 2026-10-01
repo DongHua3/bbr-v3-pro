@@ -47,7 +47,7 @@ SECURITY_MODPROBE_CONF="/etc/modprobe.d/99-bbr-v3-pro-security.conf"
 QUICK_COMMAND_PATH="/usr/local/bin/bbr-pro"
 
 # GitHub 仓库配置 (支持环境变量覆盖)
-GITHUB_REPO="${BBR_REPO:-YOUR_USERNAME/bbr-v3-pro}"
+GITHUB_REPO="${BBR_REPO:-DongHua3/bbr-v3-pro}"
 GITHUB_API_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 
 # 依赖修复与检查

@@ -26,7 +26,7 @@
 
 ### 1. 一键交互式运行
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/<你的GitHub用户名>/bbr-v3-pro/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/DongHua3/bbr-v3-pro/main/install.sh)
 ```
 
 ### 2. 自动化 CLI 指令模式（适合脚本与无人值守）
@@ -77,7 +77,7 @@ bbr-v3-pro/
 2. 在仓库的 `Settings -> Actions -> General` 中，确保 Workflow 拥有 `Read and write permissions`；
 3. 进入 `Actions` 页面，手动触发 `构建带有BBRv3的内核`，GitHub 云端服务器将自动拉取最新主线 Linux 内核并打上 BBRv3 补丁完成打包；
 4. 编译完成后，安装包将自动推送到您自己仓库的 Releases 中；
-5. 在 `install.sh` 顶部将 `GITHUB_REPO` 修改为您自己的仓库名（如 `BBR_REPO="你的用户名/bbr-v3-pro"`），即可实现 100% 个人私有闭环安装！
+5. 编译完成后，安装包将自动推送到您自己仓库的 Releases 中，`install.sh` 脚本已预设直接对接 `DongHua3/bbr-v3-pro`，即可实现 100% 个人私有闭环安装！
 
 ---
 
