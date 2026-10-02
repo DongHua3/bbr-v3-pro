@@ -314,24 +314,30 @@ assert_sysctl_sections_intact() {
 }
 
 # 按段替换：删除同名段后重写。
-# 用 nextfile 而不是 next —— next 会在命中起始标记后把文件尾部再打印一遍，
-# 且被跳过区域残留空行、反复执行时空行累积。
+#
+# 实现要点（教训）：绝不能在这里用 awk 的 nextfile。
+# nextfile 的语义是"停止处理当前文件"，因此当目标段【不是最后一段】时，
+# 它会把目标段之后的所有内容一并丢掉 —— 实测中"写 qdisc 段把后面的
+# tune 段整个截断"就是这么发生的，正好毁掉本机制要保护的东西。
+# 正确做法是用 skip 标志在流式处理中跳过目标段，其余内容原样保留。
 replace_sysctl_section() {
-    local section="$1" tmp
+    local section="$1" tmp content
     $SUDO touch "$SYSCTL_CONF" || return 1
     assert_sysctl_sections_intact || return 1
 
     tmp="$(mktemp)"
-    $SUDO awk -v s="$section" '
-        $0 == "# >>> " s { skip=1; nextfile }
-        !skip { print }
-    ' "$SYSCTL_CONF" > "$tmp"
+    content="$(cat)"
 
     {
+        $SUDO awk -v s="$section" '
+            $0 == "# >>> " s { skip = 1; next }
+            $0 == "# <<< " s { skip = 0; next }
+            !skip { print }
+        ' "$SYSCTL_CONF"
         echo "# >>> $section"
-        cat
+        printf '%s\n' "$content"
         echo "# <<< $section"
-    } >> "$tmp"
+    } > "$tmp"
 
     $SUDO cp "$tmp" "$SYSCTL_CONF"
     rm -f "$tmp"
