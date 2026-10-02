@@ -415,11 +415,22 @@ BBR_REPO="你的用户名/bbr-v3-pro" sudo bash /tmp/bbr.sh --install-kernel
 ```
 
 ### 本地脱机构建
-构建脚本支持本地目录自寻址，无需依赖 GitHub Actions 环境变量：
+
+若要在独立 Linux 机器上本地编译 BBRv3 内核，请按以下步骤操作：
+
 ```bash
-bash scripts/prepare-kernel-config.sh x86_64
-# 或
-bash scripts/prepare-kernel-config.sh arm64
+# 1. 克隆 Linux 稳定版内核源码（以 6.12.y 为例）并进入源码目录
+git clone --depth=1 --branch linux-6.12.y https://github.com/gregkh/linux.git kernel/linux
+cd kernel/linux
+
+# 2. 应用 BBRv3 主线内核移植补丁
+bash ../../scripts/apply-bbrv3-port.sh
+
+# 3. 准备内核编译配置（支持目录自寻址，自动注入调优策略并校验 12 项 Hyper-V 驱动）
+bash ../../scripts/prepare-kernel-config.sh x86_64   # ARM64 机器传入 arm64
+
+# 4. 执行多核并行编译并生成 Debian 安装包
+make bindeb-pkg -j$(nproc) LOCALVERSION=-bbrv3 KDEB_COMPRESS=gzip skipdbg=true
 ```
 
 ---

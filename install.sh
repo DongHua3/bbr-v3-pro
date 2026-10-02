@@ -550,11 +550,6 @@ replace_sysctl_section() {
     return 0
 }
 
-# 整文件重置（一键还原出厂 / 卸载时使用）
-reset_sysctl_conf() {
-    $SUDO rm -f "$SYSCTL_CONF"
-}
-
 # ==============================================================================
 #  sysctl 写入校验
 #  原实现全部是 `sysctl -w xxx=yyy >/dev/null 2>&1`，失败被静默吞掉，
