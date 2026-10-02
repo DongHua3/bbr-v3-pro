@@ -8,6 +8,10 @@
 
 set -u
 
+# 脚本版本。改动本脚本时请一并递增，便于判断本地副本（如 /usr/local/bin/bbr
+# 的缓存）是否已过期。用 `--version` 或 `--status` 查看。
+BBR_SCRIPT_VERSION="2026.10.02"
+
 # 色彩定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -22,20 +26,48 @@ log_success() { echo -e "${GREEN}[OK]${PLAIN} $*"; }
 log_warn()    { echo -e "${YELLOW}[WARN]${PLAIN} $*"; }
 log_error()   { echo -e "${RED}[ERROR]${PLAIN} $*"; }
 
-# 确保以 root 权限执行
-if [[ $EUID -ne 0 ]]; then
-    log_error "请使用 root 权限运行此脚本 (例如: $SUDO bash $0)"
-    exit 1
-fi
-
 # 以 root 运行时不需要 sudo。精简镜像/容器里常常没有安装 sudo，
 # 此时 `sudo xxx` 会以 "command not found" 失败，导致所有 sysctl 写入、
 # modprobe、模块探测被误判为失败（明明权限足够）。
 # 因此统一走 $SUDO：root 下为空，非 root 下为 sudo。
+# 注意：必须在任何引用 $SUDO 的代码之前定义（set -u 下引用未定义变量会直接退出）。
 if [[ $EUID -eq 0 ]] && ! command -v sudo >/dev/null 2>&1; then
     SUDO=""
 else
     SUDO="sudo"
+fi
+
+# 信息类参数提前处理：不依赖 root 与发行版，非 Debian 或普通用户也能查
+if [[ $# -gt 0 ]]; then
+    case "$1" in
+        --version|-V)
+            echo "bbr-v3-pro $BBR_SCRIPT_VERSION"
+            exit 0
+            ;;
+        --help|-h)
+            echo "bbr-v3-pro $BBR_SCRIPT_VERSION"
+            echo "用法: $0 [选项]"
+            echo "  --version             查看脚本版本"
+            echo "  --status              查看当前网络状态与内核版本"
+            echo "  --install-kernel      安装/更新 BBRv3 内核（标准版）"
+            echo "  --install-kernel=max  安装 BBRv3 Max 激进吞吐内核（仅测速实验）"
+            echo "  --apply-bbr           启用 BBR + FQ"
+            echo "  --tune=ai-gateway     应用 AI 网关与跨洋全栈优化（推荐默认）"
+            echo "  --tune=smart          应用智能 BDP 动态带宽优化"
+            echo "  --tune=apac           应用亚太短链路低延迟优化"
+            echo "  --check-ports         检查关键端口占用"
+            echo "  --clean               清空网络调优配置"
+            echo "  --uninstall-kernel    卸载 BBRv3 内核并回滚引导"
+            echo "  --uninstall-all       彻底卸载工具与所有网络配置"
+            exit 0
+            ;;
+    esac
+fi
+
+# 确保以 root 权限执行
+if [[ $EUID -ne 0 ]]; then
+    log_error "请使用 root 权限运行此脚本 (例如: sudo bash $0)"
+    exit 1
 fi
 
 # 检查系统发行版
@@ -951,6 +983,7 @@ get_network_metrics() {
 check_bbr_status() {
     get_network_metrics
     echo -e "\n${BOLD}==================== BBR 状态与系统体检 ====================${PLAIN}"
+    echo -e "脚本版本       : ${GREEN}$BBR_SCRIPT_VERSION${PLAIN}"
     echo -e "系统内核版本   : ${GREEN}$METRIC_KERNEL${PLAIN}"
     echo -e "TCP 拥塞控制   : ${GREEN}$METRIC_ALGO_DISPLAY${PLAIN}"
     echo -e "UDP 套接字缓冲 : ${GREEN}$METRIC_UDP_BUFFER${PLAIN}"
@@ -1352,6 +1385,7 @@ show_menu() {
         get_network_metrics
 
         echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${PLAIN}"
+        echo -e " 脚本版本: ${GREEN}${BBR_SCRIPT_VERSION}${PLAIN}"
         echo -e " 系统内核版本: ${GREEN}${METRIC_KERNEL}${PLAIN}"
         echo -e " TCP 拥塞控制: ${GREEN}${METRIC_ALGO_DISPLAY}${PLAIN}"
         echo -e " UDP 套接字缓冲: ${GREEN}${METRIC_UDP_BUFFER}${PLAIN}"
@@ -1469,7 +1503,9 @@ if [[ $# -gt 0 ]]; then
             exit 0
             ;;
         --help|-h)
+            echo "bbr-v3-pro $BBR_SCRIPT_VERSION"
             echo "用法: $0 [选项]"
+            echo "  --version             查看脚本版本"
             echo "  --status              查看当前网络状态与内核版本"
             echo "  --install-kernel      安装或更新最新 BBRv3 内核（标准版）"
             echo "  --install-kernel=max  安装最新 BBRv3 Max 激进吞吐内核（仅测速实验）"
