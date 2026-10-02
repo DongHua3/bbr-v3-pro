@@ -44,7 +44,7 @@ def arm64_config(repo_root: Path) -> dict:
 
 def test_r2_t1_x86_64_hyperv_core_enabled(x86_config: dict):
     """Tier 1: Verify core Hyper-V bus and timer drivers are enabled in x86-64.config."""
-    assert x86_config.get("CONFIG_HYPERV") in ("m", "y"), "CONFIG_HYPERV must be enabled (m or y)"
+    assert x86_config.get("CONFIG_HYPERV") == "y", "CONFIG_HYPERV must be built-in (=y)"
     assert x86_config.get("CONFIG_HYPERV_TIMER") == "y", "CONFIG_HYPERV_TIMER must be built-in (=y)"
 
 
@@ -55,9 +55,10 @@ def test_r2_t1_x86_64_hyperv_storage_net_enabled(x86_config: dict):
 
 
 def test_r2_t1_arm64_hyperv_core_enabled(arm64_config: dict):
-    """Tier 1: Verify core Hyper-V bus and timer drivers are enabled in arm64.config."""
-    assert arm64_config.get("CONFIG_HYPERV") in ("m", "y"), "CONFIG_HYPERV must be enabled in arm64"
-    assert arm64_config.get("CONFIG_HYPERV_TIMER") == "y", "CONFIG_HYPERV_TIMER must be built-in in arm64"
+    """Tier 1: Verify core Hyper-V bus is enabled in arm64.config and timer is arch-specific."""
+    assert arm64_config.get("CONFIG_HYPERV") == "y", "CONFIG_HYPERV must be built-in (=y) in arm64"
+    # CONFIG_HYPERV_TIMER is x86_64-specific (def_bool HYPERV && X86 in Kconfig); ARM64 uses arm_arch_timer
+    assert arm64_config.get("CONFIG_HYPERV_TIMER") is None or arm64_config.get("CONFIG_HYPERV_TIMER") == "n"
 
 
 def test_r2_t1_arm64_hyperv_storage_net_enabled(arm64_config: dict):
@@ -147,7 +148,6 @@ def test_r2_t3_x86_and_arm64_driver_parity(x86_config: dict, arm64_config: dict)
     """Tier 3: Verify parity between x86_64 and arm64 across all key Hyper-V companion drivers."""
     parity_keys = [
         "CONFIG_HYPERV",
-        "CONFIG_HYPERV_TIMER",
         "CONFIG_HYPERV_UTILS",
         "CONFIG_HYPERV_BALLOON",
         "CONFIG_HYPERV_NET",

@@ -68,8 +68,10 @@ apply_policy_config() {
   scripts/config --disable AF_RXRPC
   scripts/config --disable RXKAD
 
-  scripts/config --module HYPERV
-  scripts/config --enable HYPERV_TIMER
+  scripts/config --enable HYPERV
+  if [ "$arch" = "x86_64" ]; then
+    scripts/config --enable HYPERV_TIMER
+  fi
   scripts/config --module HYPERV_UTILS
   scripts/config --module HYPERV_BALLOON
   scripts/config --module HYPERV_NET
@@ -122,8 +124,10 @@ validate_config() {
   require_config_line 'CONFIG_IP_NF_NAT=m' 'CONFIG_IP_NF_NAT is not module-enabled.'
   require_config_line 'CONFIG_IP_NF_FILTER=m' 'CONFIG_IP_NF_FILTER is not module-enabled.'
   require_config_line 'CONFIG_IP_NF_TARGET_MASQUERADE=m' 'CONFIG_IP_NF_TARGET_MASQUERADE is not module-enabled.'
-  require_config_line 'CONFIG_HYPERV=m' 'CONFIG_HYPERV is not module-enabled.'
-  require_config_line 'CONFIG_HYPERV_TIMER=y' 'CONFIG_HYPERV_TIMER is not enabled.'
+  require_config_line 'CONFIG_HYPERV=y' 'CONFIG_HYPERV is not enabled.'
+  if [ "$arch" = "x86_64" ]; then
+    require_config_line 'CONFIG_HYPERV_TIMER=y' 'CONFIG_HYPERV_TIMER is not enabled.'
+  fi
   require_config_line 'CONFIG_HYPERV_UTILS=m' 'CONFIG_HYPERV_UTILS is not module-enabled.'
   require_config_line 'CONFIG_HYPERV_BALLOON=m' 'CONFIG_HYPERV_BALLOON is not module-enabled.'
   require_config_line 'CONFIG_HYPERV_NET=m' 'CONFIG_HYPERV_NET is not module-enabled.'

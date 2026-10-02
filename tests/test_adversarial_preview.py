@@ -328,7 +328,7 @@ class TestPrepareKernelConfigAdversarial:
             }
             res = run_bash_script(script, args=["x86_64"], cwd=tmp_dir, env=env)
             assert res.returncode != 0
-            assert "CONFIG_HYPERV is not module-enabled" in res.stdout or "CONFIG_HYPERV is not module-enabled" in res.stderr
+            assert "CONFIG_HYPERV is not enabled" in res.stdout or "CONFIG_HYPERV is not enabled" in res.stderr
 
 
 # ==============================================================================
@@ -450,8 +450,7 @@ class TestHyperVConfigParityAdversarial:
     """Stress-test Hyper-V configuration symbols, arch parity, and dependency closure."""
 
     CORE_AND_COMPANION_HYPERV_DRIVERS = [
-        ("CONFIG_HYPERV", "m"),
-        ("CONFIG_HYPERV_TIMER", "y"),
+        ("CONFIG_HYPERV", "y"),
         ("CONFIG_HYPERV_UTILS", "m"),
         ("CONFIG_HYPERV_BALLOON", "m"),
         ("CONFIG_HYPERV_NET", "m"),
@@ -483,6 +482,10 @@ class TestHyperVConfigParityAdversarial:
             assert arm_val == expected_val, (
                 f"arm64.config: {sym} expected {expected_val}, got {arm_val}"
             )
+
+        # CONFIG_HYPERV_TIMER is x86-specific (def_bool HYPERV && X86)
+        assert x86_config.get("CONFIG_HYPERV_TIMER") == "y"
+        assert arm64_config.get("CONFIG_HYPERV_TIMER") is None or arm64_config.get("CONFIG_HYPERV_TIMER") == "n"
 
     def test_hyperv_kconfig_dependency_closure(
         self, x86_config: Dict[str, str], arm64_config: Dict[str, str]
