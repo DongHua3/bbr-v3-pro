@@ -393,6 +393,14 @@ sysctl_report() {
     return 0
 }
 
+# 每个顶层操作开始时复位计数器，保证一次操作只出一份报告。
+# 调优函数会调用 apply_bbr_and_qdisc（它自己也会 report 一次），
+# 若不复位就会出现"同一次操作报告两遍"的重复输出。
+sysctl_reset_counters() {
+    SYSCTL_FAILURES=0
+    SYSCTL_FAIL_KEYS=""
+}
+
 # ==============================================================================
 #  调优参数的安全取值（避免影响同机其它服务）
 #
@@ -541,6 +549,7 @@ apply_bbr_and_qdisc() {
     local algo="${1:-bbr}"
     local qdisc="${2:-fq}"
 
+    sysctl_reset_counters
     log_info "正在配置拥塞算法 [$algo] 与队列调度 [$qdisc]..."
     load_qdisc_module "$qdisc" || true
 
@@ -564,6 +573,9 @@ EOF
     log_success "配置已生效并持久化至: $SYSCTL_CONF"
     log_info "  当前拥塞控制算法: $(sysctl -n net.ipv4.tcp_congestion_control)"
     log_info "  当前队列调度算法: $(sysctl -n net.core.default_qdisc)"
+    # 算法部分的成败已在上面 report 过，这里清空计数，避免调用方
+    # （如 AI 预设）的最终报告把同一批失败重复统计一遍。
+    sysctl_reset_counters
 }
 
 # ==============================================================================
