@@ -38,8 +38,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/DongHua3/bbr-v3-pro/main/ins
 # 一键启用原生 BBR + FQ (官方内核 / 零风险)
 ./install.sh --apply-bbr
 
-# 一键应用智能全栈调优 (AI网关+跨洋大带宽+TCP+UDP复合)
+# 一键应用 AI 网关与跨洋全栈调优预设 (TCP+UDP复合)
 ./install.sh --tune=ai-gateway
+
+# 一键应用智能 BDP 动态带宽调优
+./install.sh --tune=smart
 
 # 一键应用亚太短链路低延迟调优
 ./install.sh --tune=apac

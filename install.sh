@@ -196,11 +196,10 @@ apply_bbr_and_qdisc() {
 }
 
 # ==============================================================================
-#  核心调优方案 1: 智能全栈优化 (AI 网关 / 跨洋大带宽 / TCP+UDP 复合)
-#  专为 VLESS + Hysteria 2 + cliproxyapi AI 大模型流式调用深度协同打造
+#  方案 4: 静态预设优化 (AI 网关 / 跨洋大带宽 / TCP+UDP 复合)
 # ==============================================================================
 apply_ai_gateway_tuning() {
-    log_info "正在计算系统物理内存边界并应用智能全栈优化..."
+    log_info "正在计算系统物理内存边界并应用 AI 网关 & 跨洋全栈优化预设..."
     get_safe_memory_limits
 
     local algo="bbr"
@@ -249,7 +248,7 @@ apply_ai_gateway_tuning() {
         echo "net.ipv4.tcp_notsent_lowat = 16384"
     } | sudo tee -a "$SYSCTL_CONF" >/dev/null
 
-    log_success "智能全栈调优配置已写入：$SYSCTL_CONF"
+    log_success "AI 网关与跨洋全栈优化预设已写入：$SYSCTL_CONF"
     echo -e "  ${BOLD}核心调优摘要：${PLAIN}"
     echo -e "  - 拥塞控制 / 队列 : ${GREEN}$(sysctl -n net.ipv4.tcp_congestion_control) + $(sysctl -n net.core.default_qdisc)${PLAIN}"
     echo -e "  - 单 Socket 缓冲区: ${GREEN}$((TARGET_SOCKET_BYTES / 1024 / 1024)) MB${PLAIN} (已实施小内存安全钳位)"
@@ -260,7 +259,97 @@ apply_ai_gateway_tuning() {
 }
 
 # ==============================================================================
-#  核心调优方案 2: 亚太短链路低延迟调优 (适用于香港 / 日本 / 新加坡等直连)
+#  方案 5: BBR v3 智能带宽动态优化 (基于 BDP 带宽时延积计算模型)
+# ==============================================================================
+apply_smart_bandwidth_tuning() {
+    echo -e "\n${BOLD}================= BBR v3 智能带宽优化 (BDP 计算引擎) =================${PLAIN}"
+    echo -e "根据您的【实际线路带宽】与【真实网络延迟(RTT)】，科学计算最佳吞吐缓冲区大小。"
+    echo -e "------------------------------------------------------------------------"
+    
+    get_safe_memory_limits
+    local algo="bbr"
+    local qdisc="fq"
+    local output_bytes="4194304"
+
+    read -p "请输入 VPS 峰值带宽 (Mbps，直接回车默认 100): " user_bw
+    user_bw=$(echo "$user_bw" | tr -d '[:space:]')
+    [[ -z "$user_bw" || ! "$user_bw" =~ ^[0-9]+$ ]] && user_bw=100
+
+    echo -e "\n请选择您的主要目标链路延迟特征："
+    echo -e "  1. 美西 / 欧美长链路 (RTT 约 150ms ~ 250ms，美区住宅/VPS 推荐)"
+    echo -e "  2. 亚太近距离链路 (RTT 约 30ms ~ 80ms，香港/日本/新加坡)"
+    echo -e "  3. 自定义输入延迟 (ms)"
+    read -p "请选择 [1-3] (回车默认 1): " rtt_choice
+    rtt_choice=$(echo "$rtt_choice" | tr -d '[:space:]')
+    
+    local rtt_ms=180
+    case "$rtt_choice" in
+        2) rtt_ms=60 ;;
+        3) 
+            read -p "请输入真实单程延迟 (毫秒，例如 180): " user_rtt
+            user_rtt=$(echo "$user_rtt" | tr -d '[:space:]')
+            [[ -n "$user_rtt" && "$user_rtt" =~ ^[0-9]+$ ]] && rtt_ms=$user_rtt
+            ;;
+        *) rtt_ms=180 ;;
+    esac
+
+    # BDP 计算公式: BDP(Bytes) = (带宽(Mbps) * 10^6 / 8) * (延迟(ms) / 1000)
+    # 结合 BBR 的动态拥塞窗口增益系数 (~2.5x - 3x BDP) 留足突发空间
+    local bdp_raw=$(( (user_bw * 125000 * rtt_ms) / 1000 ))
+    local calculated_buffer=$(( bdp_raw * 3 ))
+
+    # 设定下限保底 4MB，上限不能击穿小内存物理钳位线
+    local min_floor=$(( 4 * 1024 * 1024 ))
+    (( calculated_buffer < min_floor )) && calculated_buffer=$min_floor
+    if (( calculated_buffer > MAX_SOCKET_BYTES )); then
+        calculated_buffer=$MAX_SOCKET_BYTES
+        log_warn "计算结果超出小内存安全线，已触发安全钳位限制为: $((MAX_SOCKET_BYTES / 1024 / 1024)) MB"
+    fi
+
+    load_qdisc_module "$qdisc"
+
+    sudo sysctl -w net.core.default_qdisc="$qdisc" >/dev/null 2>&1
+    sudo sysctl -w net.ipv4.tcp_congestion_control="$algo" >/dev/null 2>&1
+    sudo sysctl -w net.core.rmem_max="$calculated_buffer" >/dev/null 2>&1
+    sudo sysctl -w net.core.wmem_max="$calculated_buffer" >/dev/null 2>&1
+    sudo sysctl -w net.core.netdev_max_backlog="10000" >/dev/null 2>&1
+    sudo sysctl -w net.core.somaxconn="4096" >/dev/null 2>&1
+    sudo sysctl -w net.ipv4.tcp_rmem="4096 87380 $calculated_buffer" >/dev/null 2>&1
+    sudo sysctl -w net.ipv4.tcp_wmem="4096 65536 $calculated_buffer" >/dev/null 2>&1
+    sudo sysctl -w net.ipv4.tcp_mem="$TCP_MEM_MIN $TCP_MEM_PRESSURE $TCP_MEM_MAX" >/dev/null 2>&1
+    sudo sysctl -w net.ipv4.tcp_limit_output_bytes="$output_bytes" >/dev/null 2>&1
+    sudo sysctl -w net.ipv4.tcp_slow_start_after_idle="0" >/dev/null 2>&1
+    sudo sysctl -w net.ipv4.tcp_window_scaling="1" >/dev/null 2>&1
+    sudo sysctl -w net.ipv4.tcp_mtu_probing="1" >/dev/null 2>&1
+    sudo sysctl -w net.ipv4.tcp_notsent_lowat="16384" >/dev/null 2>&1
+
+    clean_sysctl_conf
+    {
+        echo "# bbr-v3-pro: Smart BDP Dynamic Tuning (BW: ${user_bw}Mbps, RTT: ${rtt_ms}ms)"
+        echo "net.core.default_qdisc = $qdisc"
+        echo "net.ipv4.tcp_congestion_control = $algo"
+        echo "net.core.rmem_max = $calculated_buffer"
+        echo "net.core.wmem_max = $calculated_buffer"
+        echo "net.core.netdev_max_backlog = 10000"
+        echo "net.core.somaxconn = 4096"
+        echo "net.ipv4.tcp_rmem = 4096 87380 $calculated_buffer"
+        echo "net.ipv4.tcp_wmem = 4096 65536 $calculated_buffer"
+        echo "net.ipv4.tcp_mem = $TCP_MEM_MIN $TCP_MEM_PRESSURE $TCP_MEM_MAX"
+        echo "net.ipv4.tcp_limit_output_bytes = $output_bytes"
+        echo "net.ipv4.tcp_slow_start_after_idle = 0"
+        echo "net.ipv4.tcp_window_scaling = 1"
+        echo "net.ipv4.tcp_mtu_probing = 1"
+        echo "net.ipv4.tcp_notsent_lowat = 16384"
+    } | sudo tee -a "$SYSCTL_CONF" >/dev/null
+
+    log_success "BBR v3 智能带宽动态调优已完成并持久化生效！"
+    echo -e "  - 输入基准      : ${GREEN}${user_bw} Mbps / 延迟 ${rtt_ms} ms${PLAIN}"
+    echo -e "  - 计算所得套接字: ${GREEN}$((calculated_buffer / 1024 / 1024)) MB${PLAIN} (理论 BDP 黄金窗口)"
+    echo -e "  - 物理安全线    : 全局 TCP 限制在物理内存 40% 水位内，绝无 OOM 隐患"
+}
+
+# ==============================================================================
+#  方案 6: 亚太短链路低延迟调优 (适用于香港 / 日本 / 新加坡等直连)
 # ==============================================================================
 apply_apac_tuning() {
     log_info "正在应用亚太短链路低延迟调优 (RTT < 80ms)..."
@@ -573,28 +662,30 @@ show_menu() {
     echo -e "  ${BOLD}1.${PLAIN} 查看系统网络栈与内核状态 (含 BBRv3 检测)"
     echo -e "  ${BOLD}2.${PLAIN} 启用 BBR + FQ"
     echo -e "  ${BOLD}3.${PLAIN} 启用 BBR + CAKE (抗晚高峰网络拥堵、防队头阻塞)"
-    echo -e "  ${BOLD}4.${PLAIN} 应用智能全栈优化 (AI 网关 / 跨洋大带宽 / TCP+UDP复合)"
-    echo -e "  ${BOLD}5.${PLAIN} 应用亚太短链路低延迟调优 (精准小缓冲区)"
-    echo -e "  ${BOLD}6.${PLAIN} 检查系统 TCP / UDP 端口占用 (80 / 443 / 8443 / 自定义)"
-    echo -e "  ${BOLD}7.${PLAIN} 还原系统出厂网络设置 (彻底清空调优配置)"
-    echo -e "  ${BOLD}8.${PLAIN} 安装 / 更新 BBRv3 内核 (自建 / 个人 Release)"
+    echo -e "  ${BOLD}4.${PLAIN} 应用 AI 网关与跨洋全栈优化 (TCP+UDP复合 / cliproxyapi + Hy2 预设)"
+    echo -e "  ${BOLD}5.${PLAIN} BBR v3 智能带宽动态调优 (按带宽与延迟动态计算 BDP)"
+    echo -e "  ${BOLD}6.${PLAIN} 应用亚太短链路低延迟调优 (精准小缓冲区)"
+    echo -e "  ${BOLD}7.${PLAIN} 检查系统 TCP / UDP 端口占用 (80 / 443 / 8443 / 自定义)"
+    echo -e "  ${BOLD}8.${PLAIN} 还原系统出厂网络设置 (彻底清空调优配置)"
+    echo -e "  ${BOLD}9.${PLAIN} 安装 / 更新 BBRv3 内核 (自建 / 个人 Release)"
     echo -e "  ${BOLD}0.${PLAIN} 退出管理系统"
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${PLAIN}"
     echo -e "快捷唤醒指令: ${GREEN}bbr${PLAIN}"
     echo -e "----------------------------------------------------------------"
-    read -p "请输入功能编号 [0-8]: " opt
+    read -p "请输入功能编号 [0-9]: " opt
 
     case "$opt" in
         1) check_bbr_status ;;
         2) apply_bbr_and_qdisc "bbr" "fq" ;;
         3) apply_bbr_and_qdisc "bbr" "cake" ;;
         4) apply_ai_gateway_tuning ;;
-        5) apply_apac_tuning ;;
-        6) check_port_conflicts ;;
-        7) clear_network_tuning ;;
-        8) install_bbrv3_kernel "standard" ;;
+        5) apply_smart_bandwidth_tuning ;;
+        6) apply_apac_tuning ;;
+        7) check_port_conflicts ;;
+        8) clear_network_tuning ;;
+        9) install_bbrv3_kernel "standard" ;;
         0) exit 0 ;;
-        *) log_error "输入无效，请输入 [0-8]！" ;;
+        *) log_error "输入无效，请输入 [0-9]！" ;;
     esac
 
     echo ""
@@ -622,6 +713,10 @@ if [[ $# -gt 0 ]]; then
             apply_ai_gateway_tuning
             exit 0
             ;;
+        --tune=smart)
+            apply_smart_bandwidth_tuning
+            exit 0
+            ;;
         --tune=apac)
             apply_apac_tuning
             exit 0
@@ -638,7 +733,8 @@ if [[ $# -gt 0 ]]; then
             echo "用法: $0 [选项]"
             echo "  --status              查看当前网络状态与内核版本"
             echo "  --apply-bbr           启用系统原生 BBR + FQ"
-            echo "  --tune=ai-gateway     应用智能全栈优化 (AI网关+跨洋TCP+UDP)"
+            echo "  --tune=ai-gateway     应用 AI 网关与跨洋全栈优化 (TCP+UDP)"
+            echo "  --tune=smart          应用智能 BDP 动态带宽优化"
             echo "  --tune=apac           应用亚太短链路优化"
             echo "  --clean               清空所有调优配置恢复出厂默认"
             echo "  --check-ports         检查关键端口占用状态"
