@@ -2,15 +2,6 @@ name: 构建带有BBRv3的内核
 
 on:
   workflow_dispatch:
-    inputs:
-      force_rebuild:
-        description: '强制重建：即使当前内核版本的 Release 已存在也重新编译（用于更新 deb 版本号/校验和等打包变更）'
-        type: boolean
-        default: false
-      kernel_version:
-        description: '指定要构建的内核版本（如 7.2.8）。留空则使用 kernel.org 当前最新 stable'
-        type: string
-        default: ''
   schedule:
     # Daily automatic kernel refresh. BBRv3 itself stays pinned to the repo patch.
     - cron: "17 3 * * *"
@@ -41,14 +32,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          forced_version="${{ inputs.kernel_version }}"
-          if [[ -n "$forced_version" ]]; then
-            raw_version="$forced_version"
-            echo "使用手动指定的内核版本: $raw_version"
-          else
-            raw_version=$(curl -fsSL https://www.kernel.org/finger_banner \
-              | awk -F: '/latest stable version/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}')
-          fi
+          raw_version=$(curl -fsSL https://www.kernel.org/finger_banner \
+            | awk -F: '/latest stable version/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}')
           if [ -z "$raw_version" ]; then
             echo "Failed to read latest stable kernel version from kernel.org." >&2
             exit 1
@@ -65,14 +50,6 @@ jobs:
 
           echo "raw_kernel_version=$raw_version" >> "$GITHUB_OUTPUT"
           echo "kernel_version=$version" >> "$GITHUB_OUTPUT"
-
-          # 强制重建：用于打包层变更（如 KDEB_PKGVERSION、SHA256SUMS）需要在
-          # 同一内核版本上重新出包时。注意会覆盖同名 tag 的 Release。
-          if [[ "${{ inputs.force_rebuild }}" == "true" ]]; then
-            echo "Force rebuild requested; skipping the already-published check."
-            echo "build_needed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
 
           missing=0
           for arch in x86_64 arm64; do
@@ -200,10 +177,22 @@ jobs:
             exit 1
           fi
 
-          # BBRv3 关键符号必须存在
-          for sym in BBR_VERSION bbr_update_bw bbr_set_cwnd; do
-            if ! grep -q "\b${sym}\b" net/ipv4/tcp_bbr.c; then
-              echo "ERROR: 补丁后未找到 BBRv3 关键符号: ${sym}"
+          # BBRv3 新增的核心符号必须存在。
+          # 注意：这里只能选【补丁新增】的符号。BBRv2 的遗留符号（如
+          # bbr_update_bw、bbr_set_cwnd）恰恰是 v3 补丁要删除的，
+          # 拿它们做断言必然失败（曾因此让 4 条构建腿全部中断）。
+          for sym in bbr_reset_full_bw bbr_start_bw_probe_down \
+                     bbr_handle_inflight_too_high bbr_adapt_lower_bounds; do
+            if ! grep -qw "${sym}" net/ipv4/tcp_bbr.c; then
+              echo "ERROR: 补丁后未找到 BBRv3 新增符号: ${sym}"
+              exit 1
+            fi
+          done
+
+          # 反向断言：v2 的遗留符号应当已被补丁移除
+          for sym in bbr_update_bw; do
+            if grep -qw "${sym}" net/ipv4/tcp_bbr.c; then
+              echo "ERROR: 仍存在 BBRv2 遗留符号: ${sym}，补丁可能未完整应用。"
               exit 1
             fi
           done
