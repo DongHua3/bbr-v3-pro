@@ -578,7 +578,12 @@ EOF
 
     log_success "配置已生效并持久化至: $SYSCTL_CONF"
     log_info "  当前拥塞控制算法: $(sysctl -n net.ipv4.tcp_congestion_control)"
-    log_info "  当前队列调度算法: $(sysctl -n net.core.default_qdisc)"
+    local eff_qdisc; eff_qdisc="$(current_effective_qdisc)"
+    if [[ -n "$eff_qdisc" ]]; then
+        log_info "  当前队列调度算法: ${eff_qdisc} (网卡实际生效)"
+    else
+        log_info "  当前队列调度算法: $(sysctl -n net.core.default_qdisc) (内核默认)"
+    fi
     # 算法部分的成败已在上面 report 过，这里清空计数，避免调用方
     # （如 AI 预设）的最终报告把同一批失败重复统计一遍。
     sysctl_reset_counters
@@ -883,13 +888,36 @@ bbr_is_v3() {
     return 1
 }
 
+# 读取当前出口网卡【实际生效】的 root qdisc。
+# 为什么需要它：net.core.default_qdisc 只是"新建队列的默认值"，网卡上已经存在的
+# root qdisc 不会随之改变。只显示 default_qdisc 会误导用户 ——
+# 例如切到 cake 后 default_qdisc 仍显示 fq，而网卡实际已经在用 cake。
+current_effective_qdisc() {
+    local iface cur
+    command -v tc >/dev/null 2>&1 || { echo ""; return 0; }
+    while IFS= read -r iface; do
+        [[ -n "$iface" ]] || continue
+        cur="$(tc qdisc show dev "$iface" 2>/dev/null | awk '/^qdisc/ {print $2; exit}')"
+        [[ -n "$cur" ]] && { echo "$cur"; return 0; }
+    done < <(get_default_route_ifaces)
+    echo ""
+}
+
 # ==============================================================================
 #  获取当前网络核心状态 (用于顶部仪表盘与状态检查)
 # ==============================================================================
 get_network_metrics() {
     METRIC_KERNEL=$(uname -r)
     METRIC_ALGO=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "未知")
-    METRIC_QDISC=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "未知")
+    METRIC_QDISC_DEFAULT=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "未知")
+    METRIC_QDISC_IFACE=$(current_effective_qdisc)
+    if [[ -n "$METRIC_QDISC_IFACE" && "$METRIC_QDISC_IFACE" != "$METRIC_QDISC_DEFAULT" ]]; then
+        METRIC_QDISC="${METRIC_QDISC_IFACE} (网卡实际) / ${METRIC_QDISC_DEFAULT} (内核默认)"
+    elif [[ -n "$METRIC_QDISC_IFACE" ]]; then
+        METRIC_QDISC="$METRIC_QDISC_IFACE"
+    else
+        METRIC_QDISC="$METRIC_QDISC_DEFAULT"
+    fi
 
     if bbr_is_v3; then
         METRIC_ALGO_DISPLAY="${METRIC_ALGO} (v3)"
