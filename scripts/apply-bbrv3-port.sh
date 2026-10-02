@@ -48,6 +48,14 @@ else
   fi
   patch -p1 --forward --fuzz=3 < "$patch_file"
   echo "WARNING: patch applied with fuzz; refresh the patch file when convenient." >&2
+  # 模糊应用意味着部分 hunk 的上下文与预期不符，补丁可能落在语义错误的位置。
+  # 这里打一个显式标记，让流水线把它写进 Release 说明，用户能看到自己装的是
+  # "模糊移植"内核；不要依赖 patch 的退出码来判断补丁质量。
+  PATCH_APPLIED_WITH_FUZZ=1
+  export PATCH_APPLIED_WITH_FUZZ
+  if [[ -n "${GITHUB_ENV:-}" ]]; then
+    echo "PATCH_APPLIED_WITH_FUZZ=1" >> "$GITHUB_ENV"
+  fi
 fi
 
 if ! grep -q '^#define BBR_VERSION[[:space:]]*3' net/ipv4/tcp_bbr.c; then

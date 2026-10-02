@@ -1,0 +1,44 @@
+name: lint-install-sh
+
+on:
+  push:
+    paths:
+      - 'install.sh'
+      - 'scripts/**'
+      - '.github/workflows/lint.yml'
+  pull_request:
+    paths:
+      - 'install.sh'
+      - 'scripts/**'
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: bash 语法检查
+        run: |
+          set -e
+          for f in install.sh scripts/*.sh; do
+            echo "== bash -n $f"
+            bash -n "$f"
+          done
+
+      - name: 安装 shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: shellcheck（先以 error 级为门禁）
+        run: |
+          # 首次接入先用 -S error 挡住真正会出错的问题；
+          # 待 warning 级问题清理完再收紧到 -S warning。
+          shellcheck -S error install.sh scripts/*.sh
+
+      - name: shellcheck（warning 级，仅报告不阻断）
+        continue-on-error: true
+        run: |
+          shellcheck -S warning install.sh scripts/*.sh || true

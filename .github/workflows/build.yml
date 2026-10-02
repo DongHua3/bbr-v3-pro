@@ -165,6 +165,37 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/apply-bbrv3-port.sh"
           grep -n "BBR_VERSION" net/ipv4/tcp_bbr.c
 
+      - name: 补丁质量断言
+        if: env.BUILD_NEEDED == 'true'
+        working-directory: ./kernel/linux
+        run: |
+          # 模糊应用（fuzz）通过不代表补丁语义正确：patch 的退出码只说明 hunk
+          # 被接受，不说明落在预期位置。这里做结构性断言，并保留 .rej/.orig 供排查。
+          if find . -name '*.rej' | grep -q .; then
+            echo "ERROR: 存在被拒绝的补丁 hunk (.rej)，构建产物不可信。"
+            find . -name '*.rej' -print
+            exit 1
+          fi
+
+          # BBRv3 关键符号必须存在
+          for sym in BBR_VERSION bbr_update_bw bbr_set_cwnd; do
+            if ! grep -q "\b${sym}\b" net/ipv4/tcp_bbr.c; then
+              echo "ERROR: 补丁后未找到 BBRv3 关键符号: ${sym}"
+              exit 1
+            fi
+          done
+
+          # 补丁必须确实把版本标记为 3
+          grep -q '^#define BBR_VERSION[[:space:]]*3' net/ipv4/tcp_bbr.c || {
+            echo "ERROR: BBR_VERSION 不是 3，补丁未正确应用。"
+            exit 1
+          }
+
+          if [ "${PATCH_APPLIED_WITH_FUZZ:-0}" = "1" ]; then
+            echo "::warning::BBRv3 补丁以 fuzz 方式应用，上下文与预期不符，建议尽快刷新 patches/ 中的补丁文件。"
+            echo "PATCH_FUZZ_NOTE=1" >> "$GITHUB_ENV"
+          fi
+
       - name: 应用 BBRv3 Max 极限内核配置
         if: env.BUILD_NEEDED == 'true' && matrix.profile == 'max'
         working-directory: ./kernel/linux
@@ -209,17 +240,29 @@ jobs:
           name: config-${{ matrix.arch }}-${{ matrix.profile }}-${{ env.KERNEL_VERSION }}
           path: ./build-configs/${{ matrix.arch }}*.config
 
+      - name: 生成唯一 deb 版本号
+        if: env.BUILD_NEEDED == 'true'
+        working-directory: ./kernel/linux
+        run: |
+          # bindeb-pkg 默认版本号只由源码版本 + LOCALVERSION 组成，不含时间与 commit。
+          # 同一版本重复构建会产出 dpkg 判定为"同版本"的包，导致 dpkg -i 静默跳过安装。
+          # 显式设置 KDEB_PKGVERSION，用 run number 保证每次构建的版本号唯一。
+          kver="$(make -s kernelversion 2>/dev/null || echo "$KERNEL_VERSION")"
+          KDEB_PKGVERSION="${kver}-${GITHUB_RUN_NUMBER}"
+          echo "KDEB_PKGVERSION=${KDEB_PKGVERSION}" >> "$GITHUB_ENV"
+          echo "Using KDEB_PKGVERSION=${KDEB_PKGVERSION}"
+
       - name: 构建内核 Debian 包
         if: env.BUILD_NEEDED == 'true'
         working-directory: ./kernel/linux
         run: |
           if [ "${{ matrix.arch }}" = "arm64" ]; then
-            make ARCH=arm64 bindeb-pkg -j$(nproc) LOCALVERSION=${{ matrix.localversion }} KDEB_COMPRESS=gzip skipdbg=true
+            make ARCH=arm64 bindeb-pkg -j$(nproc) LOCALVERSION=${{ matrix.localversion }} KDEB_PKGVERSION="$KDEB_PKGVERSION" KDEB_COMPRESS=gzip skipdbg=true
           else
-            make bindeb-pkg -j$(nproc) LOCALVERSION=${{ matrix.localversion }} KDEB_COMPRESS=gzip skipdbg=true
+            make bindeb-pkg -j$(nproc) LOCALVERSION=${{ matrix.localversion }} KDEB_PKGVERSION="$KDEB_PKGVERSION" KDEB_COMPRESS=gzip skipdbg=true
           fi
 
-      - name: 检查 deb 包
+      - name: 检查 deb 包并生成校验和
         if: env.BUILD_NEEDED == 'true'
         run: |
           if find ./kernel -maxdepth 1 \( -name '*-dbg*.deb' -o -name '*-dbgsym*.deb' \) | grep -q .; then
@@ -228,6 +271,9 @@ jobs:
             exit 1
           fi
           find ./kernel -maxdepth 1 -name 'linux-*.deb' -print | sort
+          # 供安装脚本做完整性校验
+          ( cd ./kernel && sha256sum linux-*.deb > SHA256SUMS )
+          cat ./kernel/SHA256SUMS
 
       - name: 发布前复查是否已发布
         if: env.BUILD_NEEDED == 'true'
@@ -264,8 +310,13 @@ jobs:
           tag_name: ${{ matrix.arch }}-${{ env.KERNEL_VERSION }}${{ matrix.release_suffix }}
           files: |
             ./kernel/linux-*.deb
+            ./kernel/SHA256SUMS
             ./build-configs/${{ matrix.arch }}-${{ env.KERNEL_VERSION }}.config
-          body: "带有 ${{ matrix.profile_name }} 的最新内核，适用于 ${{ matrix.arch }} 架构。"
+          body: |
+            带有 ${{ matrix.profile_name }} 的最新内核，适用于 ${{ matrix.arch }} 架构。
+
+            Debian 包版本: ${{ env.KDEB_PKGVERSION }}
+            ${{ env.PATCH_FUZZ_NOTE == '1' && '⚠️ 本次 BBRv3 补丁以 fuzz 方式应用，上下文与预期不符，请谨慎使用并尽快刷新 patches/ 中的补丁文件。' || '' }}
 
   update-config-baseline:
     needs: [preflight, build]

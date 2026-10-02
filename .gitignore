@@ -1,0 +1,22 @@
+# 备份与临时文件
+*.bak
+*.bak-*
+*.orig
+*.rej
+*.tmp
+*.swp
+*~
+
+# 构建产物
+/kernel/
+/kernel-max/
+/build-configs/
+*.deb
+*.ddeb
+*.changes
+*.buildinfo
+
+# 本地辅助脚本与草稿
+_*.py
+_*.sh
+scratch/
