@@ -53,17 +53,30 @@ GITHUB_API_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 
 # 依赖修复与检查
 check_and_install_deps() {
-    local missing_deps=()
-    local required_cmds=("curl" "wget" "dpkg" "awk" "sed" "sysctl" "jq" "ip" "ss")
+    local missing_pkgs=()
+    command -v curl >/dev/null 2>&1   || missing_pkgs+=("curl")
+    command -v wget >/dev/null 2>&1   || missing_pkgs+=("wget")
+    command -v jq >/dev/null 2>&1     || missing_pkgs+=("jq")
+    command -v dpkg >/dev/null 2>&1   || missing_pkgs+=("dpkg")
+    command -v awk >/dev/null 2>&1    || missing_pkgs+=("gawk")
+    command -v sed >/dev/null 2>&1    || missing_pkgs+=("sed")
+    command -v sysctl >/dev/null 2>&1 || missing_pkgs+=("procps")
+    if ! command -v ip >/dev/null 2>&1 || ! command -v ss >/dev/null 2>&1; then
+        missing_pkgs+=("iproute2")
+    fi
 
-    for cmd in "${required_cmds[@]}"; do
-        if ! command -v "$cmd" &> /dev/null; then
-            missing_deps+=("$cmd")
-        fi
-    done
+    if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
+        # 去重
+        local -A seen=()
+        local unique_pkgs=()
+        for p in "${missing_pkgs[@]}"; do
+            if [[ -z "${seen[$p]:-}" ]]; then
+                seen[$p]=1
+                unique_pkgs+=("$p")
+            fi
+        done
 
-    if [[ ${#missing_deps[@]} -gt 0 ]]; then
-        log_info "检测到缺失必要依赖: ${missing_deps[*]}，正在自动安装..."
+        log_info "检测到缺失必要依赖包: ${unique_pkgs[*]}，正在自动安装..."
         
         # 检查并释放可能被残留进程占用的 dpkg / apt 锁
         if fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then
@@ -78,7 +91,7 @@ check_and_install_deps() {
             apt-get update || true
         fi
 
-        if ! apt-get install -y "${missing_deps[@]}"; then
+        if ! apt-get install -y "${unique_pkgs[@]}"; then
             log_error "自动安装依赖失败，请手动排查 apt 软件源后重试。"
             exit 1
         fi
@@ -86,12 +99,14 @@ check_and_install_deps() {
     fi
 }
 
-# 默认自动注册快捷命令 bbr
+# 默认自动注册快捷命令 bbr (安全校验管道路径，防止把 /dev/fd/* 复制为空文件)
 ensure_quick_command() {
     if [[ ! -f "$QUICK_COMMAND_PATH" ]]; then
-        if [[ -f "$0" ]]; then
+        if [[ -f "$0" && "$0" != /dev/fd/* && "$0" != /proc/* ]]; then
             cp -f "$0" "$QUICK_COMMAND_PATH"
             chmod 755 "$QUICK_COMMAND_PATH"
+        else
+            curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPO}/main/install.sh" -o "$QUICK_COMMAND_PATH" 2>/dev/null && chmod 755 "$QUICK_COMMAND_PATH" || true
         fi
     fi
 }
@@ -725,52 +740,53 @@ uninstall_everything() {
 #  主菜单与交互调度
 # ==============================================================================
 show_menu() {
-    clear
-    get_network_metrics
+    while true; do
+        clear
+        get_network_metrics
 
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${PLAIN}"
-    echo -e " 系统内核版本: ${GREEN}${METRIC_KERNEL}${PLAIN}"
-    echo -e " TCP 拥塞控制: ${GREEN}${METRIC_ALGO_DISPLAY}${PLAIN}"
-    echo -e " UDP 套接字缓冲: ${GREEN}${METRIC_UDP_BUFFER}${PLAIN}"
-    echo -e " 队列调度算法: ${GREEN}${METRIC_QDISC}${PLAIN}"
-    echo -e " 物理内存状态: ${GREEN}${METRIC_MEM_DISPLAY}${PLAIN}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${PLAIN}"
-    echo -e "  ${BOLD}1.${PLAIN} 查看系统网络栈与内核状态 (含 BBRv3 检测)"
-    echo -e "  ${BOLD}2.${PLAIN} 安装 / 更新 BBRv3 内核 (自建 / 个人 Release)"
-    echo -e "  ${BOLD}3.${PLAIN} 启用 BBR + FQ"
-    echo -e "  ${BOLD}4.${PLAIN} 启用 BBR + CAKE (抗晚高峰网络拥堵、防队头阻塞)"
-    echo -e "  ${BOLD}5.${PLAIN} 应用 AI 网关与跨洋全栈优化 (TCP+UDP复合 / 一键懒人预设)"
-    echo -e "  ${BOLD}6.${PLAIN} BBR v3 智能带宽动态调优 (按实际带宽与延迟计算 BDP)"
-    echo -e "  ${BOLD}7.${PLAIN} 应用亚太短链路低延迟调优 (精准小缓冲区)"
-    echo -e "  ${BOLD}8.${PLAIN} 检查系统 TCP / UDP 端口占用 (80 / 443 / 8443 / 自定义)"
-    echo -e "  ${BOLD}9.${PLAIN} 还原系统出厂网络设置 (清空所有 sysctl 调优配置)"
-    echo -e "  ${BOLD}10.${PLAIN} 卸载自建 BBRv3 内核 (安全回滚至官方原厂内核)"
-    echo -e "  ${BOLD}11.${PLAIN} 彻底卸载 bbr-v3-pro (清理快捷命令及所有残留)"
-    echo -e "  ${BOLD}0.${PLAIN} 退出管理系统"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${PLAIN}"
-    echo -e "快捷唤醒指令: ${GREEN}bbr${PLAIN}"
-    echo -e "----------------------------------------------------------------"
-    read -p "请输入功能编号 [0-11]: " opt
+        echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${PLAIN}"
+        echo -e " 系统内核版本: ${GREEN}${METRIC_KERNEL}${PLAIN}"
+        echo -e " TCP 拥塞控制: ${GREEN}${METRIC_ALGO_DISPLAY}${PLAIN}"
+        echo -e " UDP 套接字缓冲: ${GREEN}${METRIC_UDP_BUFFER}${PLAIN}"
+        echo -e " 队列调度算法: ${GREEN}${METRIC_QDISC}${PLAIN}"
+        echo -e " 物理内存状态: ${GREEN}${METRIC_MEM_DISPLAY}${PLAIN}"
+        echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${PLAIN}"
+        echo -e "  ${BOLD}1.${PLAIN} 查看系统网络栈与内核状态 (含 BBRv3 检测)"
+        echo -e "  ${BOLD}2.${PLAIN} 安装 / 更新 BBRv3 内核 (自建 / 个人 Release)"
+        echo -e "  ${BOLD}3.${PLAIN} 启用 BBR + FQ"
+        echo -e "  ${BOLD}4.${PLAIN} 启用 BBR + CAKE (抗晚高峰网络拥堵、防队头阻塞)"
+        echo -e "  ${BOLD}5.${PLAIN} 应用 AI 网关与跨洋全栈优化 (TCP+UDP复合 / 一键懒人预设)"
+        echo -e "  ${BOLD}6.${PLAIN} BBR v3 智能带宽动态调优 (按实际带宽与延迟计算 BDP)"
+        echo -e "  ${BOLD}7.${PLAIN} 应用亚太短链路低延迟调优 (精准小缓冲区)"
+        echo -e "  ${BOLD}8.${PLAIN} 检查系统 TCP / UDP 端口占用 (80 / 443 / 8443 / 自定义)"
+        echo -e "  ${BOLD}9.${PLAIN} 还原系统出厂网络设置 (清空所有 sysctl 调优配置)"
+        echo -e "  ${BOLD}10.${PLAIN} 卸载自建 BBRv3 内核 (安全回滚至官方原厂内核)"
+        echo -e "  ${BOLD}11.${PLAIN} 彻底卸载 bbr-v3-pro (清理快捷命令及所有残留)"
+        echo -e "  ${BOLD}0.${PLAIN} 退出管理系统"
+        echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${PLAIN}"
+        echo -e "快捷唤醒指令: ${GREEN}bbr${PLAIN}"
+        echo -e "----------------------------------------------------------------"
+        read -p "请输入功能编号 [0-11]: " opt
 
-    case "$opt" in
-        1) check_bbr_status ;;
-        2) install_bbrv3_kernel "standard" ;;
-        3) apply_bbr_and_qdisc "bbr" "fq" ;;
-        4) apply_bbr_and_qdisc "bbr" "cake" ;;
-        5) apply_ai_gateway_tuning ;;
-        6) apply_smart_bandwidth_tuning ;;
-        7) apply_apac_tuning ;;
-        8) check_port_conflicts ;;
-        9) clear_network_tuning ;;
-        10) uninstall_bbrv3_kernel ;;
-        11) uninstall_everything ;;
-        0) exit 0 ;;
-        *) log_error "输入无效，请输入 [0-11]！" ;;
-    esac
+        case "$opt" in
+            1) check_bbr_status ;;
+            2) install_bbrv3_kernel "standard" ;;
+            3) apply_bbr_and_qdisc "bbr" "fq" ;;
+            4) apply_bbr_and_qdisc "bbr" "cake" ;;
+            5) apply_ai_gateway_tuning ;;
+            6) apply_smart_bandwidth_tuning ;;
+            7) apply_apac_tuning ;;
+            8) check_port_conflicts ;;
+            9) clear_network_tuning ;;
+            10) uninstall_bbrv3_kernel ;;
+            11) uninstall_everything ;;
+            0) exit 0 ;;
+            *) log_error "输入无效，请输入 [0-11]！" ;;
+        esac
 
-    echo ""
-    read -n 1 -s -r -p "按任意键返回主菜单..."
-    show_menu
+        echo ""
+        read -n 1 -s -r -p "按任意键返回主菜单..."
+    done
 }
 
 # ==============================================================================
