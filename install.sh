@@ -49,10 +49,68 @@ if [[ $# -gt 0 ]]; then
             echo "bbr-v3-pro v$BBR_SCRIPT_VERSION"
             exit 0
             ;;
+        --update|--self-update)
+            # 自更新：把最新脚本覆盖到快捷命令位置。
+            # 这里用字面路径与字面 URL —— QUICK_COMMAND_PATH / GITHUB_REPO
+            # 两个常量在本段之后才定义，此处的目的是让"更新"自身不依赖它们。
+            _upd_target="/usr/local/bin/bbr"
+            _upd_url="https://raw.githubusercontent.com/DongHua3/bbr-v3-pro/main/install.sh"
+            echo "当前版本: v$BBR_SCRIPT_VERSION"
+            echo "正在获取最新版..."
+
+            if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+                echo "[ERROR] 需要 curl 或 wget 才能更新。" >&2
+                exit 1
+            fi
+
+            _upd_tmp="$(mktemp)"
+            if command -v curl >/dev/null 2>&1; then
+                curl -fsSL -H 'Cache-Control: no-cache' -o "$_upd_tmp" "$_upd_url" \
+                    || { echo "[ERROR] 下载失败，请检查网络。" >&2; rm -f "$_upd_tmp"; exit 1; }
+            else
+                wget -q -O "$_upd_tmp" "$_upd_url" \
+                    || { echo "[ERROR] 下载失败，请检查网络。" >&2; rm -f "$_upd_tmp"; exit 1; }
+            fi
+
+            # 校验下载到的确实是本项目脚本，避免把坏文件写进 PATH
+            if ! grep -q 'QUICK_COMMAND_PATH=' "$_upd_tmp" 2>/dev/null; then
+                echo "[ERROR] 下载内容校验失败（不是本项目脚本），已放弃更新。" >&2
+                rm -f "$_upd_tmp"; exit 1
+            fi
+
+            _upd_new="$(grep -m1 '^BBR_SCRIPT_VERSION=' "$_upd_tmp" | cut -d'"' -f2)"
+            if [[ -z "$_upd_new" ]]; then
+                echo "[ERROR] 无法识别新版本号，已放弃更新。" >&2
+                rm -f "$_upd_tmp"; exit 1
+            fi
+
+            if [[ "$_upd_new" == "$BBR_SCRIPT_VERSION" ]]; then
+                echo "已是最新版本 v$_upd_new，无需更新。"
+                rm -f "$_upd_tmp"
+                exit 0
+            fi
+
+            if [[ $EUID -ne 0 ]]; then
+                if ! command -v sudo >/dev/null 2>&1; then
+                    echo "[ERROR] 需要 root 权限写入 $_upd_target（且系统无 sudo）。" >&2
+                    rm -f "$_upd_tmp"; exit 1
+                fi
+                sudo cp "$_upd_tmp" "$_upd_target" && sudo chmod 755 "$_upd_target" \
+                    || { echo "[ERROR] 写入 $_upd_target 失败。" >&2; rm -f "$_upd_tmp"; exit 1; }
+            else
+                cp "$_upd_tmp" "$_upd_target" && chmod 755 "$_upd_target" \
+                    || { echo "[ERROR] 写入 $_upd_target 失败。" >&2; rm -f "$_upd_tmp"; exit 1; }
+            fi
+            rm -f "$_upd_tmp"
+
+            echo "[OK] 已更新: v$BBR_SCRIPT_VERSION -> v$_upd_new  ($_upd_target)"
+            exit 0
+            ;;
         --help|-h)
             echo "bbr-v3-pro v$BBR_SCRIPT_VERSION"
             echo "用法: $0 [选项]"
             echo "  --version             查看脚本版本"
+            echo "  --update              把快捷命令 bbr 更新到最新版"
             echo "  --status              查看当前网络状态与内核版本"
             echo "  --install-kernel      安装/更新 BBRv3 内核（标准版）"
             echo "  --install-kernel=max  安装 BBRv3 Max 激进吞吐内核（仅测速实验）"
