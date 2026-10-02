@@ -10,7 +10,12 @@ set -u
 
 # 脚本版本。改动本脚本时请一并递增，便于判断本地副本（如 /usr/local/bin/bbr
 # 的缓存）是否已过期。用 `--version` 或 `--status` 查看。
-BBR_SCRIPT_VERSION="2026.10.02"
+#
+# 版本规则（语义化版本）：
+#   主版本 不兼容变更（配置文件路径、CLI 参数语义、菜单编号调整）
+#   次版本 新增功能（新调优预设、新 CLI 参数、新检查项）
+#   修订号 缺陷修复、文案与显示修正
+BBR_SCRIPT_VERSION="1.0.0"
 
 # 色彩定义
 RED='\033[0;31m'
@@ -41,11 +46,11 @@ fi
 if [[ $# -gt 0 ]]; then
     case "$1" in
         --version|-V)
-            echo "bbr-v3-pro $BBR_SCRIPT_VERSION"
+            echo "bbr-v3-pro v$BBR_SCRIPT_VERSION"
             exit 0
             ;;
         --help|-h)
-            echo "bbr-v3-pro $BBR_SCRIPT_VERSION"
+            echo "bbr-v3-pro v$BBR_SCRIPT_VERSION"
             echo "用法: $0 [选项]"
             echo "  --version             查看脚本版本"
             echo "  --status              查看当前网络状态与内核版本"
@@ -1503,7 +1508,7 @@ if [[ $# -gt 0 ]]; then
             exit 0
             ;;
         --help|-h)
-            echo "bbr-v3-pro $BBR_SCRIPT_VERSION"
+            echo "bbr-v3-pro v$BBR_SCRIPT_VERSION"
             echo "用法: $0 [选项]"
             echo "  --version             查看脚本版本"
             echo "  --status              查看当前网络状态与内核版本"
