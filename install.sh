@@ -15,7 +15,7 @@ set -u
 #   主版本 不兼容变更（配置文件路径、CLI 参数语义、菜单编号调整）
 #   次版本 新增功能（新调优预设、新 CLI 参数、新检查项）
 #   修订号 缺陷修复、文案与显示修正
-BBR_SCRIPT_VERSION="1.1.0"
+BBR_SCRIPT_VERSION="1.1.1"
 
 # 色彩定义
 RED='\033[0;31m'
@@ -84,10 +84,33 @@ if [[ $# -gt 0 ]]; then
                 rm -f "$_upd_tmp"; exit 1
             fi
 
+            # 版本比较：raw.githubusercontent.com 的边缘缓存不尊重
+            # Cache-Control: no-cache，刚推送后可能仍返回旧版本。若不区分
+            # "相同" 与 "更旧"，用户会看到"已是最新"而完全不知道 CDN 在返回旧文件。
+            _upd_force=0
+            [[ "${2:-}" == "--force" || "${2:-}" == "-f" ]] && _upd_force=1
+
             if [[ "$_upd_new" == "$BBR_SCRIPT_VERSION" ]]; then
-                echo "已是最新版本 v$_upd_new，无需更新。"
+                if (( _upd_force )); then
+                    echo "远端与本地同为 v$_upd_new，--force 已指定，将执行覆盖写入。"
+                else
+                    echo "已是最新版本 v$_upd_new，无需更新。"
+                    echo "（若确认远端已发布更新版，可能是 raw CDN 缓存未刷新，"
+                    echo "  可等待几分钟后重试，或执行：$0 --update --force）"
+                    rm -f "$_upd_tmp"
+                    exit 0
+                fi
+            fi
+
+            if (( _upd_force == 0 )) \
+                && [[ "$_upd_new" != "$BBR_SCRIPT_VERSION" ]] \
+                && ! printf '%s\n%s\n' "$BBR_SCRIPT_VERSION" "$_upd_new" | sort -V -C; then
+                # sort -V -C 失败说明本地版本更高 —— 远端拿到的是更旧的副本
+                echo "[WARN] 远端版本 v$_upd_new 低于本地 v$BBR_SCRIPT_VERSION，"
+                echo "       通常是 raw CDN 缓存尚未刷新，本次不做覆盖以免降级。"
+                echo "       如确认要强制覆盖：$0 --update --force"
                 rm -f "$_upd_tmp"
-                exit 0
+                exit 1
             fi
 
             if [[ $EUID -ne 0 ]]; then
@@ -110,7 +133,7 @@ if [[ $# -gt 0 ]]; then
             echo "bbr-v3-pro v$BBR_SCRIPT_VERSION"
             echo "用法: $0 [选项]"
             echo "  --version             查看脚本版本"
-            echo "  --update              把快捷命令 bbr 更新到最新版"
+            echo "  --update [--force]    把快捷命令 bbr 更新到最新版（--force 强制覆盖）"
             echo "  --status              查看当前网络状态与内核版本"
             echo "  --install-kernel      安装/更新 BBRv3 内核（标准版）"
             echo "  --install-kernel=max  安装 BBRv3 Max 激进吞吐内核（仅测速实验）"
