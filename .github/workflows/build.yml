@@ -2,6 +2,15 @@ name: 构建带有BBRv3的内核
 
 on:
   workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: '强制重建：即使当前内核版本的 Release 已存在也重新编译（用于更新 deb 版本号/校验和等打包变更）'
+        type: boolean
+        default: false
+      kernel_version:
+        description: '指定要构建的内核版本（如 7.2.8）。留空则使用 kernel.org 当前最新 stable'
+        type: string
+        default: ''
   schedule:
     # Daily automatic kernel refresh. BBRv3 itself stays pinned to the repo patch.
     - cron: "17 3 * * *"
@@ -32,8 +41,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          raw_version=$(curl -fsSL https://www.kernel.org/finger_banner \
-            | awk -F: '/latest stable version/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}')
+          forced_version="${{ inputs.kernel_version }}"
+          if [[ -n "$forced_version" ]]; then
+            raw_version="$forced_version"
+            echo "使用手动指定的内核版本: $raw_version"
+          else
+            raw_version=$(curl -fsSL https://www.kernel.org/finger_banner \
+              | awk -F: '/latest stable version/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}')
+          fi
           if [ -z "$raw_version" ]; then
             echo "Failed to read latest stable kernel version from kernel.org." >&2
             exit 1
@@ -50,6 +65,14 @@ jobs:
 
           echo "raw_kernel_version=$raw_version" >> "$GITHUB_OUTPUT"
           echo "kernel_version=$version" >> "$GITHUB_OUTPUT"
+
+          # 强制重建：用于打包层变更（如 KDEB_PKGVERSION、SHA256SUMS）需要在
+          # 同一内核版本上重新出包时。注意会覆盖同名 tag 的 Release。
+          if [[ "${{ inputs.force_rebuild }}" == "true" ]]; then
+            echo "Force rebuild requested; skipping the already-published check."
+            echo "build_needed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           missing=0
           for arch in x86_64 arm64; do
