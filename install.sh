@@ -356,6 +356,14 @@ clean_sysctl_conf() {
 SYSCTL_FAILURES=0
 SYSCTL_FAIL_KEYS=""
 
+# 把任意空白序列（空格/制表符）压成单个空格并去掉首尾空白。
+# 必需：sysctl -n 对多值参数（tcp_rmem/tcp_wmem/tcp_mem）输出的是【制表符】
+# 分隔，而写入时用的是空格。只做 tr -s ' ' 不会处理制表符，会造成
+# "数值完全相同却判定为未采纳" 的假阴性。
+sysctl_norm() {
+    printf '%s' "$1" | tr -s '[:space:]' ' ' | sed -e 's/^ //' -e 's/ $//'
+}
+
 sysctl_apply_verify() {
     local key="$1" val="$2" want got
     if ! $SUDO sysctl -w "$key=$val" >/dev/null 2>&1; then
@@ -364,8 +372,8 @@ sysctl_apply_verify() {
         log_warn "内核拒绝写入 ${key}=${val}（可能超出上限或该内核不支持）"
         return 1
     fi
-    want="$(echo "$val" | tr -s ' ')"
-    got="$(sysctl -n "$key" 2>/dev/null | tr -s ' ' | sed 's/[[:space:]]*$//')"
+    want="$(sysctl_norm "$val")"
+    got="$(sysctl_norm "$(sysctl -n "$key" 2>/dev/null || true)")"
     if [[ "$got" != "$want" ]]; then
         SYSCTL_FAILURES=$((SYSCTL_FAILURES + 1))
         SYSCTL_FAIL_KEYS="${SYSCTL_FAIL_KEYS} ${key}"
