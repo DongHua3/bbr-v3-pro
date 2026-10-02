@@ -15,7 +15,7 @@ set -u
 #   主版本 不兼容变更（配置文件路径、CLI 参数语义、菜单编号调整）
 #   次版本 新增功能（新调优预设、新 CLI 参数、新检查项）
 #   修订号 缺陷修复、文案与显示修正
-BBR_SCRIPT_VERSION="1.1.1"
+BBR_SCRIPT_VERSION="1.1.2"
 
 # 色彩定义
 RED='\033[0;31m'
@@ -1606,7 +1606,31 @@ if [[ $# -gt 0 ]]; then
             exit 0
             ;;
         *)
-            log_error "未知参数: $1 (使用 --help 查看参数列表)"
+            log_error "未知参数: $1"
+            # 常见拼写错误纠错：单横杠、缺横杠、大小写等
+            _arg_suggest=""
+            case "$1" in
+                -update|-Update|-UPDATE)            _arg_suggest="--update" ;;
+                update|Update)                      _arg_suggest="--update" ;;
+                -version|-v|-V)                     _arg_suggest="--version" ;;
+                version)                            _arg_suggest="--version" ;;
+                --updata|--updte|--updte)           _arg_suggest="--update" ;;
+                -help|-h)                           _arg_suggest="--help" ;;
+                help)                               _arg_suggest="--help" ;;
+                -status)                            _arg_suggest="--status" ;;
+                status)                             _arg_suggest="--status" ;;
+                -install-kernel|install-kernel)     _arg_suggest="--install-kernel" ;;
+                -apply-bbr|apply-bbr)               _arg_suggest="--apply-bbr" ;;
+                -clean|clean)                       _arg_suggest="--clean" ;;
+                -check-ports|check-ports)           _arg_suggest="--check-ports" ;;
+                -uninstall-kernel|uninstall-kernel) _arg_suggest="--uninstall-kernel" ;;
+                -uninstall-all|uninstall-all)       _arg_suggest="--uninstall-all" ;;
+                -tune=*|tune=*)                     _arg_suggest="--${1#-}" ;;
+            esac
+            if [[ -n "$_arg_suggest" ]]; then
+                log_info "是否想输入: ${GREEN}${_arg_suggest}${PLAIN} ？"
+            fi
+            log_info "完整参数列表: $0 --help"
             exit 1
             ;;
     esac
