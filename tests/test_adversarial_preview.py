@@ -646,27 +646,21 @@ class TestBuildWorkflowDAGAndMatrix:
         assert "build.result == 'success'" in jobs["update-config-baseline"].get("if", "")
 
     def test_build_matrix_coverage(self, build_workflow_yaml: dict):
-        """Verify the build matrix defines all 4 required compilation legs."""
+        """Verify the build matrix defines both required standard compilation legs."""
         matrix_includes = build_workflow_yaml["jobs"]["build"]["strategy"]["matrix"]["include"]
-        assert len(matrix_includes) == 4, "Matrix must have exactly 4 legs (2 archs x 2 profiles)"
+        assert len(matrix_includes) == 2, "Matrix must have exactly 2 legs (2 archs x standard profile)"
 
         legs = {(m["arch"], m["profile"]): m for m in matrix_includes}
         assert ("x86_64", "standard") in legs
-        assert ("x86_64", "max") in legs
         assert ("arm64", "standard") in legs
-        assert ("arm64", "max") in legs
 
         # Check runner types
         assert legs[("x86_64", "standard")]["runs_on"] == "ubuntu-latest"
         assert legs[("arm64", "standard")]["runs_on"] == "ubuntu-24.04-arm"
-        assert legs[("x86_64", "max")]["runs_on"] == "ubuntu-latest"
-        assert legs[("arm64", "max")]["runs_on"] == "ubuntu-24.04-arm"
 
         # Check localversion tags
         assert legs[("x86_64", "standard")]["localversion"] == "-bbrv3"
-        assert legs[("x86_64", "max")]["localversion"] == "-bbrv3-max"
         assert legs[("arm64", "standard")]["localversion"] == "-bbrv3"
-        assert legs[("arm64", "max")]["localversion"] == "-bbrv3-max"
 
 
 # ==============================================================================

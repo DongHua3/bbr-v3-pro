@@ -72,7 +72,7 @@ sudo bash /tmp/bbr.sh --status
 | 编号 | 功能 | 说明 |
 |---|---|---|
 | 1 | 查看系统网络栈与内核状态 | 含 BBRv3 强校验、内存防 OOM 状态与安全缓解看板 |
-| 2 | 安装 / 更新 BBRv3 内核 | 可选标准稳定版或测速 Max 激进版，装完需重启 |
+| 2 | 安装 / 更新 BBRv3 内核 | 自动拉取适配系统的最新 BBRv3 原生内核，装完需重启 |
 | 3 | 启用 BBR + FQ | 仅调整算法与基础队列，不动缓冲区 |
 | 4 | 启用 BBR + CAKE | 抗晚高峰拥堵与 ACK 抖动 |
 | 5 | 应用 AI 网关与跨洋全栈优化 | TCP+UDP 全栈大水管，防 OOM 钳位，**大多数 VPS 推荐** |
@@ -188,11 +188,8 @@ sudo reboot
 
 | 命令 | 作用 |
 |---|---|
-| `--install-kernel` | 安装/更新最新 BBRv3 标准内核 |
-| `--install-kernel=max` | 安装 Max 激进吞吐版（仅限自有链路测速实验）|
+| `--install-kernel` | 安装/更新最新 BBRv3 原生内核 |
 | `--uninstall-kernel` | 卸载自建内核，安全回滚至官方备用内核 |
-
-**Max 版说明**：放宽了丢包容忍阈值（`bbr_loss_thresh = 3%`），缩短探测周期，提高了 Startup 阶段 pacing gain。**仅适合自有实验链路测速，公网生产环境请使用标准版。**
 
 ### 网络调优预设
 
@@ -506,9 +503,7 @@ bbr-v3-pro/
 ├── patches/                      # BBRv3 主线内核移植补丁 (7.0 / 7.1 / 7.2)
 ├── scripts/
 │   ├── apply-bbrv3-port.sh       # 补丁安全版本排序 (sort -V) 与模糊匹配
-│   ├── apply-bbrv3-max-profile.sh# Max 激进测速参数注入
-│   ├── prepare-kernel-config.sh  # 内核配置策略注入与自寻址准备
-│   └── build-bbrv3-max-kernel.sh # 本地编译辅助脚本
+│   └── prepare-kernel-config.sh  # 内核配置策略注入与自寻址准备
 ├── tests/                        # 自动化回归与端到端测试套件 (174 项用例)
 ├── arm64.config                  # ARM64 内核配置 (含 12 项 Hyper-V 驱动)
 ├── x86-64.config                 # x86_64 内核配置 (含 12 项 Hyper-V 驱动)

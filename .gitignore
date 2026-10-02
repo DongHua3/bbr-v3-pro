@@ -9,7 +9,6 @@
 
 # 构建产物
 /kernel/
-/kernel-max/
 /build-configs/
 *.deb
 *.ddeb

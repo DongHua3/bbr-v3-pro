@@ -285,14 +285,12 @@ def test_r1_t4_simulated_local_developer_build_dryrun(repo_root: Path):
 
 
 def test_r1_t4_workflow_matrix_consistency(build_workflow_yaml: dict):
-    """Tier 4: Verify build matrix defines both standard and max profiles for x86_64 and arm64."""
+    """Tier 4: Verify build matrix defines standard profiles for x86_64 and arm64."""
     matrix = build_workflow_yaml["jobs"]["build"]["strategy"]["matrix"]["include"]
     
     combos = {(item["arch"], item["profile"]) for item in matrix}
     expected = {
         ("x86_64", "standard"),
         ("arm64", "standard"),
-        ("x86_64", "max"),
-        ("arm64", "max"),
     }
-    assert combos == expected, f"Matrix must contain all 4 arch/profile combinations, got: {combos}"
+    assert combos == expected, f"Matrix must contain all 2 arch/profile combinations, got: {combos}"

@@ -135,8 +135,7 @@ show_help() {
     echo "  --version             查看脚本版本"
     echo "  --update [--force]    把快捷命令 bbr 更新到最新版（--force 强制覆盖）"
     echo "  --status              查看当前网络状态与内核版本"
-    echo "  --install-kernel      安装/更新 BBRv3 内核（标准版）"
-    echo "  --install-kernel=max  安装 BBRv3 Max 激进吞吐内核（仅测速实验）"
+    echo "  --install-kernel      安装/更新 BBRv3 内核"
     echo "  --apply-bbr           启用系统原生 BBR + FQ"
     echo "  --tune=ai-gateway     应用 AI 网关与跨洋全栈优化（推荐默认）"
     echo "  --tune=smart          应用智能 BDP 动态带宽优化"
@@ -1130,7 +1129,7 @@ bbr_is_v3() {
         return 1
     fi
 
-    # 内核发行版本强校验（杜绝官方原版 BBRv1 内核误报，如 6.12.0-bbrv3 或 6.12.0-bbrv3-max）
+    # 内核发行版本强校验（杜绝官方原版 BBRv1 内核误报，如 6.12.0-bbrv3）
     krel="$(uname -r 2>/dev/null || true)"
     if [[ "$krel" =~ -bbrv3 ]]; then
         return 0
@@ -1345,7 +1344,10 @@ fetch_kernel_assets() {
 }
 
 install_bbrv3_kernel() {
-    local profile="${1:-standard}"
+    if [[ "${1:-}" == "max" ]]; then
+        log_error "BBRv3 Max 激进内核已被彻底废弃并移除，请使用 --install-kernel 安装生产级稳定 BBRv3 内核。"
+        return 1
+    fi
     assert_supported_kernel_install_system || return 1
 
     local target_repo="${GITHUB_REPO}"
@@ -1360,11 +1362,11 @@ install_bbrv3_kernel() {
 
     local latest_tag=""
     if [[ -n "$release_data" ]]; then
-        latest_tag=$(echo "$release_data" | jq -r --arg filter "$arch_filter" --arg prof "$profile" '
+        latest_tag=$(echo "$release_data" | jq -r --arg filter "$arch_filter" '
           if type=="array" then
             map(
               select(.tag_name | test("^" + $filter + "-[0-9]"; "i"))
-              | select(if $prof == "max" then (.tag_name | endswith("-max")) else ((.tag_name | endswith("-max")) | not) end)
+              | select((.tag_name | test("-max$"; "i")) | not)
             )
             | sort_by(.published_at)
             | .[-1].tag_name // ""
@@ -1390,11 +1392,11 @@ install_bbrv3_kernel() {
             base_url="https://api.github.com/repos/${target_repo}/releases"
             release_data=$(gh_api_get "$base_url" 2>/dev/null || true)
             if [[ -n "$release_data" ]]; then
-                latest_tag=$(echo "$release_data" | jq -r --arg filter "$arch_filter" --arg prof "$profile" '
+                latest_tag=$(echo "$release_data" | jq -r --arg filter "$arch_filter" '
                   if type=="array" then
                     map(
                       select(.tag_name | test("^" + $filter + "-[0-9]"; "i"))
-                      | select(if $prof == "max" then (.tag_name | endswith("-max")) else ((.tag_name | endswith("-max")) | not) end)
+                      | select((.tag_name | test("-max$"; "i")) | not)
                     )
                     | sort_by(.published_at)
                     | .[-1].tag_name // ""
@@ -1642,7 +1644,7 @@ show_menu() {
 
         case "$opt" in
             1) check_bbr_status ;;
-            2) select_kernel_profile_menu ;;
+            2) install_bbrv3_kernel ;;
             3) apply_bbr_and_qdisc "bbr" "fq" ;;
             4) apply_bbr_and_qdisc "bbr" "cake" ;;
             5) apply_ai_gateway_tuning ;;
@@ -1660,24 +1662,6 @@ show_menu() {
         echo ""
         read -n 1 -s -r -p "按任意键返回主菜单..."
     done
-}
-
-# 安装内核前选择标准版 / Max 激进版（Max 版仅适合自有链路吞吐测试）
-select_kernel_profile_menu() {
-    echo -e "\n${BOLD}请选择要安装的内核类型：${PLAIN}"
-    echo -e "  1. BBRv3 标准版（推荐日常使用）"
-    echo -e "  2. BBRv3 Max 激进吞吐版（仅适合自有链路测速实验）"
-    read -r -p "请输入 [1-2]（回车默认 1）: " profile_choice
-    profile_choice="${profile_choice//[[:space:]]/}"
-    case "$profile_choice" in
-        2)
-            log_warn "Max 版会提高探测与窗口策略的进攻性，不适合日常生产使用。"
-            install_bbrv3_kernel "max"
-            ;;
-        *)
-            install_bbrv3_kernel "standard"
-            ;;
-    esac
 }
 
 # ==============================================================================
@@ -1700,12 +1684,12 @@ if [[ $# -gt 0 ]]; then
             exit 0
             ;;
         --install-kernel)
-            install_bbrv3_kernel "standard"
+            install_bbrv3_kernel
             exit 0
             ;;
-        --install-kernel=max|--install-kernel-max)
-            install_bbrv3_kernel "max"
-            exit 0
+        --install-kernel=max|--install-kernel-max|-install-kernel=max|install-kernel=max)
+            log_error "BBRv3 Max 激进内核已被彻底废弃并移除，请使用 --install-kernel 安装生产级稳定 BBRv3 内核。"
+            exit 1
             ;;
         --apply-bbr)
             apply_bbr_and_qdisc "bbr" "fq"

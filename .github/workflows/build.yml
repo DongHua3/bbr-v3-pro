@@ -80,15 +80,13 @@ jobs:
           else
             missing=0
             for arch in x86_64 arm64; do
-              for suffix in "" "-max"; do
-                tag="$arch-$version$suffix"
-                if gh release view "$tag" >/dev/null 2>&1; then
-                  echo "$tag already exists."
-                else
-                  echo "$tag is missing."
-                  missing=1
-                fi
-              done
+              tag="$arch-$version"
+              if gh release view "$tag" >/dev/null 2>&1; then
+                echo "$tag already exists."
+              else
+                echo "$tag is missing."
+                missing=1
+              fi
             done
 
             if [ "$missing" -eq 0 ]; then
@@ -130,18 +128,6 @@ jobs:
             profile_name: BBRv3
             release_suffix: ""
             localversion: -bbrv3
-          - arch: x86_64
-            runs_on: ubuntu-latest
-            profile: max
-            profile_name: BBRv3 Max
-            release_suffix: -max
-            localversion: -bbrv3-max
-          - arch: arm64
-            runs_on: ubuntu-24.04-arm
-            profile: max
-            profile_name: BBRv3 Max
-            release_suffix: -max
-            localversion: -bbrv3-max
     runs-on: ${{ matrix.runs_on }}
     env:
       ARCH: ${{ matrix.arch }}
@@ -240,25 +226,13 @@ jobs:
             echo "PATCH_FUZZ_NOTE=1" >> "$GITHUB_ENV"
           fi
 
-      - name: 应用 BBRv3 Max 极限内核配置
-        if: env.BUILD_NEEDED == 'true' && matrix.profile == 'max'
-        working-directory: ./kernel/linux
-        run: |
-          bash "$GITHUB_WORKSPACE/scripts/apply-bbrv3-max-profile.sh"
-
       - name: 编译声明
         if: env.BUILD_NEEDED == 'true'
         working-directory: ./kernel/linux
         run: |
           grep -v "MODULE_DESCRIPTION" net/ipv4/tcp_bbr.c > net/ipv4/tcp_bbr.c.tmp
           mv net/ipv4/tcp_bbr.c.tmp net/ipv4/tcp_bbr.c
-
-          if [ "${{ matrix.profile }}" = "max" ]; then
-            echo 'MODULE_DESCRIPTION("TCP BBR v3 Max - aggressive throughput profile");' >> net/ipv4/tcp_bbr.c
-          else
-            echo 'MODULE_DESCRIPTION("TCP BBR v3 (Bottleneck Bandwidth and RTT)");' >> net/ipv4/tcp_bbr.c
-          fi
-          
+          echo 'MODULE_DESCRIPTION("TCP BBR v3 (Bottleneck Bandwidth and RTT)");' >> net/ipv4/tcp_bbr.c
           tail -n 5 net/ipv4/tcp_bbr.c
 
       - name: 更新 Makefile 中的版本号
