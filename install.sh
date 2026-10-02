@@ -395,29 +395,54 @@ sysctl_report() {
 
 # ==============================================================================
 #  调优参数的安全取值（避免影响同机其它服务）
+#
+#  注意：这两个函数在"跳过"时会设置 SKIP_* 标记，持久化写入必须据此
+#  决定是否落盘、或落盘为当前实际值。否则会出现"运行态正确跳过、配置文件
+#  却写死一个更小的值"，重启后被静默降级（例如 somaxconn 系统默认 8192，
+#  配置文件写 4096，重启即从 8192 降到 4096）。
 # ==============================================================================
 
 # tcp_mem 是全局 TCP 内存池水位。小于 256MB 的机器按 10/25/40% 算出的水位
 # 会低于内核默认值（默认量级 9501/12669/19003 pages），反而收紧吞吐，因此跳过。
 apply_safe_tcp_mem() {
     local mem_mb="${MEM_TOTAL_MB:-0}"
+    SKIP_TCP_MEM=0
     if (( mem_mb > 0 && mem_mb < 256 )); then
         log_warn "物理内存 ${mem_mb}MB 偏小，按比例算得的 tcp_mem 水位低于内核默认值，已跳过该项。"
+        SKIP_TCP_MEM=1
         return 0
     fi
     sysctl_apply_verify net.ipv4.tcp_mem "$TCP_MEM_MIN $TCP_MEM_PRESSURE $TCP_MEM_MAX"
 }
 
 # somaxconn 是全系统 listen backlog 上限，影响同机所有服务（Caddy/Nginx/Redis）。
-# 只在系统当前值偏小时提高，已是 4096 及以上则不动。
+# 只在系统当前值偏小时提高；若当前值已经更高，则运行态不动、持久化也不写死，
+# 避免重启后把系统降到 4096。
 apply_safe_somaxconn() {
     local cur
+    SKIP_SOMAXCONN=0
     cur="$(sysctl -n net.core.somaxconn 2>/dev/null || echo 128)"
     if [[ "$cur" =~ ^[0-9]+$ ]] && (( cur >= 4096 )); then
-        log_info "net.core.somaxconn 当前为 ${cur}，已不低于 4096，保持不变。"
+        log_info "net.core.somaxconn 当前为 ${cur}，已不低于 4096，保持不变（也不会写入配置文件）。"
+        SKIP_SOMAXCONN=1
         return 0
     fi
     sysctl_apply_verify net.core.somaxconn 4096
+}
+
+# 生成 "net.core.somaxconn / net.ipv4.tcp_mem" 这两行持久化内容。
+# 被跳过时输出提示注释而不是写死数值，保证"重启后不会比现在更差"。
+emit_guarded_tune_lines() {
+    if (( ${SKIP_SOMAXCONN:-0} )); then
+        echo "# net.core.somaxconn 保持不变（系统当前值已不低于 4096，本次未改动）"
+    else
+        echo "net.core.somaxconn = 4096"
+    fi
+    if (( ${SKIP_TCP_MEM:-0} )); then
+        echo "# net.ipv4.tcp_mem 保持不变（物理内存偏小，本次未改动）"
+    else
+        echo "net.ipv4.tcp_mem = $TCP_MEM_MIN $TCP_MEM_PRESSURE $TCP_MEM_MAX"
+    fi
 }
 
 # 加载队列调度内核模块（探测函数：只判断可用性，不产生校验副作用）
@@ -556,6 +581,9 @@ apply_ai_gateway_tuning() {
     apply_bbr_and_qdisc "$algo" "$qdisc"
 
     # 1. 运行时立即应用（算法参数已由 apply_bbr_and_qdisc 写入并校验）
+    # 复位跳过标记：这两个是全局变量，且 apply_safe_* 是否跳过取决于系统现状
+    SKIP_SOMAXCONN=0
+    SKIP_TCP_MEM=0
     sysctl_apply_verify net.core.rmem_max "$TARGET_SOCKET_BYTES"
     sysctl_apply_verify net.core.wmem_max "$TARGET_SOCKET_BYTES"
     sysctl_apply_verify net.core.netdev_max_backlog "10000"
@@ -577,12 +605,11 @@ apply_ai_gateway_tuning() {
 net.core.rmem_max = $TARGET_SOCKET_BYTES
 net.core.wmem_max = $TARGET_SOCKET_BYTES
 net.core.netdev_max_backlog = $TARGET_BACKLOG
-net.core.somaxconn = 4096
+$(emit_guarded_tune_lines)
 
 # TCP Buffer & Low Latency (Optimized for VLESS & AI Model Streaming)
 net.ipv4.tcp_rmem = 4096 87380 $TARGET_SOCKET_BYTES
 net.ipv4.tcp_wmem = 4096 65536 $TARGET_SOCKET_BYTES
-net.ipv4.tcp_mem = $TCP_MEM_MIN $TCP_MEM_PRESSURE $TCP_MEM_MAX
 net.ipv4.tcp_limit_output_bytes = $output_bytes
 net.ipv4.tcp_slow_start_after_idle = 0
 net.ipv4.tcp_window_scaling = 1
@@ -654,6 +681,8 @@ apply_smart_bandwidth_tuning() {
     # 算法归 qdisc 段，本函数只负责 tune 段
     apply_bbr_and_qdisc "$algo" "$qdisc"
 
+    SKIP_SOMAXCONN=0
+    SKIP_TCP_MEM=0
     sysctl_apply_verify net.core.rmem_max "$calculated_buffer"
     sysctl_apply_verify net.core.wmem_max "$calculated_buffer"
     sysctl_apply_verify net.core.netdev_max_backlog "$TARGET_BACKLOG"
@@ -672,10 +701,9 @@ apply_smart_bandwidth_tuning() {
 net.core.rmem_max = $calculated_buffer
 net.core.wmem_max = $calculated_buffer
 net.core.netdev_max_backlog = $TARGET_BACKLOG
-net.core.somaxconn = 4096
+$(emit_guarded_tune_lines)
 net.ipv4.tcp_rmem = 4096 87380 $calculated_buffer
 net.ipv4.tcp_wmem = 4096 65536 $calculated_buffer
-net.ipv4.tcp_mem = $TCP_MEM_MIN $TCP_MEM_PRESSURE $TCP_MEM_MAX
 net.ipv4.tcp_limit_output_bytes = $output_bytes
 net.ipv4.tcp_slow_start_after_idle = 0
 net.ipv4.tcp_window_scaling = 1
