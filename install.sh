@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 #  项目名称: bbr-v3-pro
-#  定位: 生产级 Linux 双栈网络调优、拥塞控制与 BBR 管理系统
+#  定位: 生产级 Linux 双栈网络调优、拥塞控制与 BBRv3 管理系统
+#  快捷唤醒: bbr
 #  特点: 纯净无广告、无 Emoji、TCP+UDP 双栈优化、小内存防 OOM 钳位、原子化安全防砖
 # ==============================================================================
 
@@ -44,7 +45,7 @@ fi
 SYSCTL_CONF="/etc/sysctl.d/99-bbr-v3-pro.conf"
 MODULES_CONF="/etc/modules-load.d/bbr-v3-pro-qdisc.conf"
 SECURITY_MODPROBE_CONF="/etc/modprobe.d/99-bbr-v3-pro-security.conf"
-QUICK_COMMAND_PATH="/usr/local/bin/bbr-pro"
+QUICK_COMMAND_PATH="/usr/local/bin/bbr"
 
 # GitHub 仓库配置 (支持环境变量覆盖)
 GITHUB_REPO="${BBR_REPO:-DongHua3/bbr-v3-pro}"
@@ -85,16 +86,12 @@ check_and_install_deps() {
     fi
 }
 
-# 快捷指令自安装 (非侵入式，可配置)
-setup_shortcut() {
-    if [[ "${BBR_SKIP_SHORTCUT:-0}" == "1" ]]; then
-        return 0
-    fi
+# 默认自动注册快捷命令 bbr
+ensure_quick_command() {
     if [[ ! -f "$QUICK_COMMAND_PATH" ]]; then
         if [[ -f "$0" ]]; then
             cp -f "$0" "$QUICK_COMMAND_PATH"
             chmod 755 "$QUICK_COMMAND_PATH"
-            log_info "已注册系统快捷指令: bbr-pro (随时可在终端输入 bbr-pro 调出管理菜单)"
         fi
     fi
 }
@@ -199,11 +196,11 @@ apply_bbr_and_qdisc() {
 }
 
 # ==============================================================================
-#  核心调优方案 1: AI 网关与跨洋全栈优化 (TCP + UDP 复合双栈)
+#  核心调优方案 1: 智能全栈优化 (AI 网关 / 跨洋大带宽 / TCP+UDP 复合)
 #  专为 VLESS + Hysteria 2 + cliproxyapi AI 大模型流式调用深度协同打造
 # ==============================================================================
 apply_ai_gateway_tuning() {
-    log_info "正在计算系统物理内存边界并应用 AI 网关 & 跨洋全栈优化..."
+    log_info "正在计算系统物理内存边界并应用智能全栈优化..."
     get_safe_memory_limits
 
     local algo="bbr"
@@ -252,7 +249,7 @@ apply_ai_gateway_tuning() {
         echo "net.ipv4.tcp_notsent_lowat = 16384"
     } | sudo tee -a "$SYSCTL_CONF" >/dev/null
 
-    log_success "AI 网关与跨洋全栈调优配置已写入：$SYSCTL_CONF"
+    log_success "智能全栈调优配置已写入：$SYSCTL_CONF"
     echo -e "  ${BOLD}核心调优摘要：${PLAIN}"
     echo -e "  - 拥塞控制 / 队列 : ${GREEN}$(sysctl -n net.ipv4.tcp_congestion_control) + $(sysctl -n net.core.default_qdisc)${PLAIN}"
     echo -e "  - 单 Socket 缓冲区: ${GREEN}$((TARGET_SOCKET_BYTES / 1024 / 1024)) MB${PLAIN} (已实施小内存安全钳位)"
@@ -303,16 +300,16 @@ clear_network_tuning() {
 }
 
 # ==============================================================================
-#  端口冲突检测小工具 (协同检查 Caddy HTTP/3 与 Hysteria 2)
+#  端口冲突检测工具 (支持核心端口 + 交互式自定义端口查验)
 # ==============================================================================
 check_port_conflicts() {
     echo -e "\n${BOLD}================= 系统关键端口占用探测 =================${PLAIN}"
-    local ports=("80:tcp" "443:tcp" "443:udp" "8443:tcp" "8443:udp" "18921:tcp")
+    local default_ports=("80:tcp" "443:tcp" "443:udp" "8443:tcp" "8443:udp")
     
     printf "%-12s | %-8s | %-16s | %-24s\n" "端口" "协议" "监听状态" "占用进程 (PID/名称)"
     echo "------------------------------------------------------------------------"
     
-    for p in "${ports[@]}"; do
+    for p in "${default_ports[@]}"; do
         local port="${p%%:*}"
         local proto="${p##*:}"
         local state="空闲 (可使用)"
@@ -334,46 +331,76 @@ check_port_conflicts() {
         printf "%-12s | %-8s | %-22b | %-24s\n" "$port" "${proto^^}" "$state" "$pinfo"
     done
     echo "------------------------------------------------------------------------"
-    echo -e "${BLUE}[最佳协同实践]${PLAIN}"
+    echo -e "${BLUE}[最佳协同实践参考]${PLAIN}"
     echo -e "  - Caddy 反代: 监听 TCP 80/443 (若开启 HTTP/3 独占 UDP 443)"
-    echo -e "  - Hysteria 2: 监听 8443 + 端口跳跃 47000:50000 (完全避开 UDP 443，互不冲突)"
-    echo -e "  - 3X-UI 面板: 监听本地 18921 (由 Caddy 本地反代，免端口直连)"
+    echo -e "  - Hysteria 2: 监听 8443 + 端口跳跃 (避开 UDP 443，互不冲突)"
+    echo ""
+    read -p "是否需要自定义查询特定端口？(输入端口号，回车跳过): " custom_p
+    custom_p=$(echo "$custom_p" | tr -d '[:space:]')
+    if [[ "$custom_p" =~ ^[0-9]+$ ]] && (( custom_p >= 1 && custom_p <= 65535 )); then
+        echo -e "\n${BOLD}正在查询自定义端口 $custom_p...${PLAIN}"
+        local tcp_raw udp_raw
+        tcp_raw=$(ss -tlpn "sport = :$custom_p" 2>/dev/null | grep -E ":$custom_p\b" || true)
+        udp_raw=$(ss -ulpn "sport = :$custom_p" 2>/dev/null | grep -E ":$custom_p\b" || true)
+        if [ -n "$tcp_raw" ]; then
+            echo -e "  TCP 状态: ${RED}已占用${PLAIN} 进程: $(echo "$tcp_raw" | awk '{print $NF}')"
+        else
+            echo -e "  TCP 状态: ${GREEN}空闲${PLAIN}"
+        fi
+        if [ -n "$udp_raw" ]; then
+            echo -e "  UDP 状态: ${RED}已占用${PLAIN} 进程: $(echo "$udp_raw" | awk '{print $NF}')"
+        else
+            echo -e "  UDP 状态: ${GREEN}空闲${PLAIN}"
+        fi
+    fi
 }
 
 # ==============================================================================
-#  检查 BBR / BBRv3 状态
+#  获取当前网络核心状态 (用于顶部仪表盘与状态检查)
 # ==============================================================================
-check_bbr_status() {
-    echo -e "\n${BOLD}==================== BBR 状态与系统体检 ====================${PLAIN}"
-    local cur_algo
-    local cur_qdisc
-    local cur_kernel
-    cur_algo=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "未知")
-    cur_qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "未知")
-    cur_kernel=$(uname -r)
-
-    echo -e "当前系统内核   : ${GREEN}$cur_kernel${PLAIN}"
-    echo -e "当前拥塞控制   : ${GREEN}$cur_algo${PLAIN}"
-    echo -e "当前队列管理   : ${GREEN}$cur_qdisc${PLAIN}"
-
-    local bbr_mod
+get_network_metrics() {
+    METRIC_KERNEL=$(uname -r)
+    METRIC_ALGO=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "未知")
+    METRIC_QDISC=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "未知")
+    
+    local bbr_mod bbr_ver
     bbr_mod=$(modinfo tcp_bbr 2>/dev/null || true)
     if [ -z "$bbr_mod" ]; then
         depmod -a 2>/dev/null || true
         bbr_mod=$(modinfo tcp_bbr 2>/dev/null || true)
     fi
-
-    local bbr_ver
     bbr_ver=$(echo "$bbr_mod" | awk '/^version:/ {print $2}')
     if [[ "$bbr_ver" == "3" ]]; then
-        echo -e "BBR 模块版本   : ${GREEN}$bbr_ver (BBR v3 已激活)${PLAIN}"
+        METRIC_ALGO_DISPLAY="${METRIC_ALGO} (v3)"
     else
-        echo -e "BBR 模块版本   : ${BLUE}${bbr_ver:-官方标准版 (Linux 内置 BBR)}${PLAIN}"
+        METRIC_ALGO_DISPLAY="${METRIC_ALGO}"
+    fi
+
+    local cur_rmem
+    cur_rmem=$(sysctl -n net.core.rmem_max 2>/dev/null || echo "212992")
+    if (( cur_rmem >= 10485760 )); then
+        METRIC_UDP_BUFFER="$((cur_rmem / 1024 / 1024)) MB (AI/Hy2 专属大水管)"
+    else
+        METRIC_UDP_BUFFER="$((cur_rmem / 1024)) KB (系统默认)"
     fi
 
     local mem_total
-    mem_total=$(awk '/MemTotal:/ {print int($2/1024) " MB"}' /proc/meminfo 2>/dev/null || echo "未知")
-    echo -e "物理内存总量   : ${BLUE}$mem_total${PLAIN}"
+    mem_total=$(awk '/MemTotal:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo "0")
+    if [ -f "$SYSCTL_CONF" ]; then
+        METRIC_MEM_DISPLAY="${mem_total} MB (已开启 40% 防 OOM 保护)"
+    else
+        METRIC_MEM_DISPLAY="${mem_total} MB (系统默认)"
+    fi
+}
+
+check_bbr_status() {
+    get_network_metrics
+    echo -e "\n${BOLD}==================== BBR 状态与系统体检 ====================${PLAIN}"
+    echo -e "系统内核版本   : ${GREEN}$METRIC_KERNEL${PLAIN}"
+    echo -e "TCP 拥塞控制   : ${GREEN}$METRIC_ALGO_DISPLAY${PLAIN}"
+    echo -e "UDP 套接字缓冲 : ${GREEN}$METRIC_UDP_BUFFER${PLAIN}"
+    echo -e "队列管理算法   : ${GREEN}$METRIC_QDISC${PLAIN}"
+    echo -e "物理内存状态   : ${GREEN}$METRIC_MEM_DISPLAY${PLAIN}"
 
     if [ -f "$SYSCTL_CONF" ]; then
         echo -e "持久化优化配置 : ${GREEN}已加载 ($SYSCTL_CONF)${PLAIN}"
@@ -385,15 +412,6 @@ check_bbr_status() {
 # ==============================================================================
 #  原子化安全内核安装逻辑 (防砖架构)
 # ==============================================================================
-gh_api_get() {
-    local url="$1"
-    if [[ -n "$GITHUB_API_TOKEN" ]]; then
-        curl -fsSL -H "Authorization: Bearer $GITHUB_API_TOKEN" -H "Accept: application/vnd.github+json" "$url"
-    else
-        curl -fsSL "$url"
-    fi
-}
-
 version_ge() {
     local current="$1"
     local required="$2"
@@ -449,6 +467,15 @@ assert_supported_kernel_install_system() {
     return 0
 }
 
+gh_api_get() {
+    local url="$1"
+    if [[ -n "$GITHUB_API_TOKEN" ]]; then
+        curl -fsSL -H "Authorization: Bearer $GITHUB_API_TOKEN" -H "Accept: application/vnd.github+json" "$url"
+    else
+        curl -fsSL "$url"
+    fi
+}
+
 install_bbrv3_kernel() {
     local profile="${1:-standard}"
     assert_supported_kernel_install_system || return 1
@@ -478,7 +505,6 @@ install_bbrv3_kernel() {
 
     if [[ -z "$latest_tag" || "$latest_tag" == "null" ]]; then
         log_error "未在仓库 $GITHUB_REPO 中找到适用于架构 [$ARCH] 的 BBRv3 内核安装包。"
-        log_info "提示: 如果您已自建仓库，请确认 GitHub Actions 是否已成功编译发布 Release。"
         return 1
     fi
 
@@ -535,30 +561,28 @@ install_bbrv3_kernel() {
 # ==============================================================================
 show_menu() {
     clear
-    local cur_algo
-    local cur_qdisc
-    local cur_mem
-    cur_algo=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "未知")
-    cur_qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "未知")
-    cur_mem=$(awk '/MemTotal:/ {print int($2/1024) "MB"}' /proc/meminfo 2>/dev/null || echo "未知")
+    get_network_metrics
 
-    echo -e "${BLUE}================================================================${PLAIN}"
-    echo -e "${GREEN}${BOLD}           bbr-v3-pro: Linux 双栈网络调优与 BBR 管理系统          ${PLAIN}"
-    echo -e "${BLUE}================================================================${PLAIN}"
-    echo -e "  1. 查看系统网络栈与内核状态 (含 BBRv3 检测)"
-    echo -e "  2. 启用系统原生 BBR + FQ (官方内核 / 稳定零风险)"
-    echo -e "  3. 启用系统原生 BBR + CAKE (抗 Bufferbloat 缓冲膨胀)"
-    echo -e "  4. 应用 AI 网关与跨洋全栈优化 (TCP+UDP复合 / cliproxyapi + Hy2)"
-    echo -e "  5. 应用亚太短链路低延迟调优 (精准小缓冲区)"
-    echo -e "  6. 检查系统 TCP / UDP 端口占用 (协同排查 80/443/8443)"
-    echo -e "  7. 还原系统出厂网络设置 (彻底清空调优配置)"
-    echo -e "  8. 安装 / 更新 BBRv3 内核 (自建/个人 Release)"
-    echo -e "  9. 创建 / 移除全局快捷命令 (bbr-pro)"
-    echo -e "  0. 退出管理系统"
-    echo -e "${BLUE}================================================================${PLAIN}"
-    echo -e "当前状态: 拥塞 [${GREEN}${cur_algo}${PLAIN}] | 队列 [${GREEN}${cur_qdisc}${PLAIN}] | 物理内存 [${GREEN}${cur_mem}${PLAIN}]"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${PLAIN}"
+    echo -e " 系统内核版本: ${GREEN}${METRIC_KERNEL}${PLAIN}"
+    echo -e " TCP 拥塞控制: ${GREEN}${METRIC_ALGO_DISPLAY}${PLAIN}"
+    echo -e " UDP 套接字缓冲: ${GREEN}${METRIC_UDP_BUFFER}${PLAIN}"
+    echo -e " 队列调度算法: ${GREEN}${METRIC_QDISC}${PLAIN}"
+    echo -e " 物理内存状态: ${GREEN}${METRIC_MEM_DISPLAY}${PLAIN}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${PLAIN}"
+    echo -e "  ${BOLD}1.${PLAIN} 查看系统网络栈与内核状态 (含 BBRv3 检测)"
+    echo -e "  ${BOLD}2.${PLAIN} 启用 BBR + FQ"
+    echo -e "  ${BOLD}3.${PLAIN} 启用 BBR + CAKE (抗晚高峰网络拥堵、防队头阻塞)"
+    echo -e "  ${BOLD}4.${PLAIN} 应用智能全栈优化 (AI 网关 / 跨洋大带宽 / TCP+UDP复合)"
+    echo -e "  ${BOLD}5.${PLAIN} 应用亚太短链路低延迟调优 (精准小缓冲区)"
+    echo -e "  ${BOLD}6.${PLAIN} 检查系统 TCP / UDP 端口占用 (80 / 443 / 8443 / 自定义)"
+    echo -e "  ${BOLD}7.${PLAIN} 还原系统出厂网络设置 (彻底清空调优配置)"
+    echo -e "  ${BOLD}8.${PLAIN} 安装 / 更新 BBRv3 内核 (自建 / 个人 Release)"
+    echo -e "  ${BOLD}0.${PLAIN} 退出管理系统"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${PLAIN}"
+    echo -e "快捷唤醒指令: ${GREEN}bbr${PLAIN}"
     echo -e "----------------------------------------------------------------"
-    read -p "请输入功能编号 [0-9]: " opt
+    read -p "请输入功能编号 [0-8]: " opt
 
     case "$opt" in
         1) check_bbr_status ;;
@@ -569,16 +593,8 @@ show_menu() {
         6) check_port_conflicts ;;
         7) clear_network_tuning ;;
         8) install_bbrv3_kernel "standard" ;;
-        9)
-            if [ -f "$QUICK_COMMAND_PATH" ]; then
-                sudo rm -f "$QUICK_COMMAND_PATH"
-                log_success "已移除快捷命令: $QUICK_COMMAND_PATH"
-            else
-                setup_shortcut
-            fi
-            ;;
         0) exit 0 ;;
-        *) log_error "输入无效，请输入 [0-9]！" ;;
+        *) log_error "输入无效，请输入 [0-8]！" ;;
     esac
 
     echo ""
@@ -590,6 +606,7 @@ show_menu() {
 #  主入口: CLI 自动化参数解析与调度
 # ==============================================================================
 check_and_install_deps
+ensure_quick_command
 
 if [[ $# -gt 0 ]]; then
     case "$1" in
@@ -621,7 +638,7 @@ if [[ $# -gt 0 ]]; then
             echo "用法: $0 [选项]"
             echo "  --status              查看当前网络状态与内核版本"
             echo "  --apply-bbr           启用系统原生 BBR + FQ"
-            echo "  --tune=ai-gateway     应用 AI 网关与跨洋全栈优化 (TCP+UDP)"
+            echo "  --tune=ai-gateway     应用智能全栈优化 (AI网关+跨洋TCP+UDP)"
             echo "  --tune=apac           应用亚太短链路优化"
             echo "  --clean               清空所有调优配置恢复出厂默认"
             echo "  --check-ports         检查关键端口占用状态"
