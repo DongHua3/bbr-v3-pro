@@ -280,3 +280,43 @@ def test_r4_t2_max_kernel_completely_purged(install_script_path: Path, install_s
         combined_output = res.stdout + res.stderr
         assert "BBRv3 Max" not in combined_output, f"Unexpected 'BBRv3 Max' in output for {flag}"
 
+
+def test_r4_t2_neutralize_sysctl_conf_conflicts(install_script_content: str):
+    """Tier 2: Verify neutralize_sysctl_conf_conflicts safely comments out legacy sysctl.conf conflicts."""
+    assert "neutralize_sysctl_conf_conflicts()" in install_script_content
+    func_code = install_script_content.split("neutralize_sysctl_conf_conflicts()")[1].split("replace_sysctl_section()")[0]
+
+    test_snippet = f"""
+    SUDO=""
+    log_info() {{ :; }}
+    neutralize_sysctl_conf_conflicts() {func_code}
+
+    tmp_conf=$(mktemp)
+    cat << 'EOF' > "$tmp_conf"
+# Legacy configuration
+net.core.rmem_max = 16777216
+net.core.wmem_max=16777216
+  net.ipv4.tcp_rmem = 4096 87380 16777216
+vm.swappiness = 10
+EOF
+
+    LEGACY_SYSCTL_CONF="$tmp_conf"
+    neutralize_sysctl_conf_conflicts
+
+    grep -q '^# \\[bbr-v3-pro override\\] net.core.rmem_max = 16777216' "$tmp_conf" || exit 1
+    grep -q '^# \\[bbr-v3-pro override\\] net.core.wmem_max=16777216' "$tmp_conf" || exit 2
+    grep -q '^# \\[bbr-v3-pro override\\]   net.ipv4.tcp_rmem = 4096 87380 16777216' "$tmp_conf" || exit 3
+    grep -q '^vm.swappiness = 10' "$tmp_conf" || exit 4
+
+    # Idempotence check
+    neutralize_sysctl_conf_conflicts
+    count=$(grep -c '\\[bbr-v3-pro override\\]' "$tmp_conf")
+    [[ "$count" -eq 3 ]] || exit 5
+
+    rm -f "$tmp_conf"
+    """
+    res = run_bash_cmd(test_snippet)
+    assert res.returncode == 0, f"neutralize_sysctl_conf_conflicts test failed (code {res.returncode}): {res.stderr}"
+
+
+

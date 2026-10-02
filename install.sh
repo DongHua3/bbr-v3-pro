@@ -191,6 +191,7 @@ fi
 
 # 核心路径常量
 SYSCTL_CONF="/etc/sysctl.d/99-bbr-v3-pro.conf"
+LEGACY_SYSCTL_CONF="/etc/sysctl.conf"
 MODULES_CONF="/etc/modules-load.d/bbr-v3-pro-qdisc.conf"
 SECURITY_MODPROBE_CONF="/etc/modprobe.d/99-bbr-v3-pro-security.conf"
 QUICK_COMMAND_PATH="/usr/local/bin/bbr"
@@ -519,6 +520,54 @@ assert_sysctl_sections_intact() {
     return 0
 }
 
+# ==============================================================================
+#  清理 /etc/sysctl.conf 中的冲突旧参数
+#
+#  背景与必要性：
+#  Linux sysctl --system 会在最后加载 /etc/sysctl.conf。
+#  如果系统之前安装过 3x-ui / Hysteria / 其他一键脚本，往往直接把
+#  net.core.rmem_max 等写在 /etc/sysctl.conf 中。
+#  若不处理，sysctl --system 就会在最后一步用旧值静默覆盖 /etc/sysctl.d/99-bbr-v3-pro.conf，
+#  导致按带宽时延积 (BDP) 动态计算出的套接字窗口无法生效。
+#  本函数检测并自动注释 /etc/sysctl.conf 中的同名旧条目（带标签安全备份），
+#  确保新配置在全局具备真正的最高生效优先级。
+# ==============================================================================
+neutralize_sysctl_conf_conflicts() {
+    local legacy_file="${LEGACY_SYSCTL_CONF:-/etc/sysctl.conf}"
+    [[ -f "$legacy_file" ]] || return 0
+
+    local -a managed_keys=(
+        "net.core.default_qdisc"
+        "net.ipv4.tcp_congestion_control"
+        "net.core.rmem_max"
+        "net.core.wmem_max"
+        "net.core.netdev_max_backlog"
+        "net.core.somaxconn"
+        "net.ipv4.tcp_rmem"
+        "net.ipv4.tcp_wmem"
+        "net.ipv4.tcp_mem"
+        "net.ipv4.tcp_limit_output_bytes"
+        "net.ipv4.tcp_slow_start_after_idle"
+        "net.ipv4.tcp_window_scaling"
+        "net.ipv4.tcp_mtu_probing"
+        "net.ipv4.tcp_notsent_lowat"
+    )
+
+    local key found=0
+    for key in "${managed_keys[@]}"; do
+        local escaped_key="${key//\./\\.}"
+        if grep -Eq "^[[:space:]]*${escaped_key}[[:space:]]*=" "$legacy_file" 2>/dev/null; then
+            $SUDO sed -i -E "s|^([[:space:]]*${escaped_key}[[:space:]]*=.*)$|# [bbr-v3-pro override] \1|" "$legacy_file" 2>/dev/null || true
+            found=$((found + 1))
+        fi
+    done
+
+    if (( found > 0 )); then
+        log_info "已自动归档 /etc/sysctl.conf 中 ${found} 项冲突旧参数（如第三方脚本残留），确保 bbr-v3-pro 全局优先生效。"
+    fi
+    return 0
+}
+
 # 按段替换：删除同名段后重写。
 #
 # 实现要点（教训）：绝不能在这里用 awk 的 nextfile。
@@ -547,6 +596,7 @@ replace_sysctl_section() {
 
     $SUDO cp "$tmp" "$SYSCTL_CONF"
     rm -f "$tmp"
+    neutralize_sysctl_conf_conflicts
     return 0
 }
 
@@ -1023,6 +1073,14 @@ EOF
 clear_network_tuning() {
     log_info "正在清空所有自定义网络优化持久化配置..."
     $SUDO rm -f "$SYSCTL_CONF" "$MODULES_CONF"
+
+    # 还原 /etc/sysctl.conf 中曾被 bbr-v3-pro 自动注释归档的旧条目
+    local legacy_file="${LEGACY_SYSCTL_CONF:-/etc/sysctl.conf}"
+    if [[ -f "$legacy_file" ]] && grep -q '\[bbr-v3-pro override\]' "$legacy_file" 2>/dev/null; then
+        $SUDO sed -i -E 's|^# \[bbr-v3-pro override\] [[:space:]]*||' "$legacy_file" 2>/dev/null || true
+        log_info "已恢复 /etc/sysctl.conf 中被暂存的旧配置参数。"
+    fi
+
     $SUDO sysctl --system >/dev/null 2>&1 || true
 
     # 删配置只能清掉"开机重新加载"的来源，当前内核里已写入的运行态值不会
