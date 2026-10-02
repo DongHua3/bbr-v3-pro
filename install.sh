@@ -15,7 +15,7 @@ set -u
 #   主版本 不兼容变更（配置文件路径、CLI 参数语义、菜单编号调整）
 #   次版本 新增功能（新调优预设、新 CLI 参数、新检查项）
 #   修订号 缺陷修复、文案与显示修正
-BBR_SCRIPT_VERSION="1.2.0"
+BBR_SCRIPT_VERSION="1.2.1"
 
 # ==============================================================================
 #  自更新：把快捷命令更新到最新版
@@ -476,11 +476,6 @@ replace_sysctl_section() {
 # 整文件重置（一键还原出厂 / 卸载时使用）
 reset_sysctl_conf() {
     $SUDO rm -f "$SYSCTL_CONF"
-}
-
-# 兼容旧调用点：整文件重置
-clean_sysctl_conf() {
-    reset_sysctl_conf
 }
 
 # ==============================================================================
@@ -1551,9 +1546,15 @@ select_kernel_profile_menu() {
 # ==============================================================================
 #  主入口: CLI 自动化参数解析与调度
 # ==============================================================================
+#  主入口
+#
+#  顺序很重要：
+#   - check_and_install_deps 两种模式都需要（CLI 的 --install-kernel 依赖 jq 等）
+#   - ensure_quick_command / apply_security_mitigations 只在【交互模式】执行，
+#     否则会出现自相矛盾的行为 —— 例如 --uninstall-all 要删除快捷命令，
+#     却在参数分发之前先被 ensure_quick_command 重新装回来。
+# ==============================================================================
 check_and_install_deps
-ensure_quick_command
-apply_security_mitigations
 
 if [[ $# -gt 0 ]]; then
     case "$1" in
@@ -1627,7 +1628,7 @@ if [[ $# -gt 0 ]]; then
                 update|Update)                      _arg_suggest="--update" ;;
                 -version|-v|-V)                     _arg_suggest="--version" ;;
                 version)                            _arg_suggest="--version" ;;
-                --updata|--updte|--updte)           _arg_suggest="--update" ;;
+                --updata|--updte|--updat)          _arg_suggest="--update" ;;
                 -help|-h)                           _arg_suggest="--help" ;;
                 help)                               _arg_suggest="--help" ;;
                 -status)                            _arg_suggest="--status" ;;
@@ -1648,5 +1649,9 @@ if [[ $# -gt 0 ]]; then
             ;;
     esac
 fi
+
+# 交互模式：进入菜单前注册快捷命令并应用安全缓解
+ensure_quick_command
+apply_security_mitigations
 
 show_menu
