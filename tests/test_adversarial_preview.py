@@ -460,7 +460,12 @@ class TestHyperVConfigParityAdversarial:
         ("CONFIG_HID_HYPERV_MOUSE", "m"),
         ("CONFIG_PCI_HYPERV", "m"),
         ("CONFIG_PCI_HYPERV_INTERFACE", "m"),
-        ("CONFIG_FB_HYPERV", "m"),
+        # 注意：CONFIG_FB_HYPERV 不在此列表中。
+        # 它是被 DRM 驱动取代的旧版 framebuffer 驱动，在现代内核（含本项目
+        # 使用的 7.x 主线）中已不是 Kconfig 符号 —— 内核自身的
+        # drivers/gpu/drm/hyperv/Kconfig 帮助文本即写明应取消选择它。
+        # 若保留此断言，会要求配置里写入一个不存在的符号，
+        # 导致 olddefconfig 丢弃该行后校验失败。图形输出改由 CONFIG_DRM_HYPERV 负责。
         ("CONFIG_DRM_HYPERV", "m"),
         ("CONFIG_HYPERV_VSOCKETS", "m"),
     ]
