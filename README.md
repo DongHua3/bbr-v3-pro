@@ -35,6 +35,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/DongHua3/bbr-v3-pro/main/ins
 # 查看当前网络拥塞算法、队列与内存状态
 ./install.sh --status
 
+# 安装或更新最新 BBRv3 内核 (自建 Release)
+./install.sh --install-kernel
+
 # 一键启用原生 BBR + FQ (官方内核 / 零风险)
 ./install.sh --apply-bbr
 
@@ -52,6 +55,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/DongHua3/bbr-v3-pro/main/ins
 
 # 一键清空所有自定义网络优化，彻底恢复出厂默认值
 ./install.sh --clean
+
+# 安全卸载 BBRv3 内核并回滚引导
+./install.sh --uninstall-kernel
+
+# 彻底卸载本工具及所有网络配置 (清理快捷命令及残留)
+./install.sh --uninstall-all
 ```
 
 ---

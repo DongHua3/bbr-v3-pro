@@ -646,6 +646,82 @@ install_bbrv3_kernel() {
 }
 
 # ==============================================================================
+#  安全卸载自建 BBRv3 内核 (回滚至官方原厂内核)
+# ==============================================================================
+uninstall_bbrv3_kernel() {
+    log_info "正在检测系统中已安装的 BBRv3 内核包..."
+    
+    local packages_to_remove
+    packages_to_remove=$(dpkg -l 2>/dev/null | awk '/^ii/ && $2 ~ /^linux-(image|headers)-/ && ($2 ~ /bbrv3/ || $2 ~ /joeyblog/) {print $2}' | tr '\n' ' ')
+
+    if [[ -z "$packages_to_remove" ]]; then
+        log_warn "未在当前系统中检测到已安装的自建 BBRv3 内核包。"
+        return 0
+    fi
+
+    # 安全断言：检查系统内是否保留官方/通用兜底内核
+    local fallback_kernels
+    fallback_kernels=$(dpkg -l 2>/dev/null | awk '/^ii/ && $2 ~ /^linux-image-[0-9]/ && ($2 !~ /bbrv3/ && $2 !~ /joeyblog/) {print $2}' | tr '\n' ' ')
+
+    if [[ -z "$fallback_kernels" ]]; then
+        log_error "【高危拦截】系统未检测到任何官方备用内核！"
+        log_warn "若此时卸载 BBRv3 内核，系统重启后将因无可用内核直接失联变砖！"
+        log_info "请先执行: sudo apt-get install -y linux-image-cloud-amd64 (或 linux-image-generic) 安装官方内核后再卸载。"
+        return 1
+    fi
+
+    echo -e "即将卸载以下 BBRv3 内核包: ${YELLOW}$packages_to_remove${PLAIN}"
+    echo -e "系统将安全回滚至备用官方内核: ${GREEN}$fallback_kernels${PLAIN}"
+    read -p "确认卸载并回滚引导吗？(y/n): " confirm_un
+    if [[ "$confirm_un" != "y" && "$confirm_un" != "Y" ]]; then
+        log_info "操作已取消。"
+        return 0
+    fi
+
+    log_info "正在安全卸载 BBRv3 内核包..."
+    if sudo apt-get purge -y $packages_to_remove; then
+        log_info "正在更新 GRUB 引导记录..."
+        if command -v update-grub &>/dev/null; then
+            sudo update-grub
+        fi
+        log_success "BBRv3 内核已成功卸载，GRUB 引导已恢复官方内核！"
+        read -p "需要重启系统以加载官方内核，是否立即重启？(y/n): " do_rb
+        if [[ "$do_rb" == "y" || "$do_rb" == "Y" ]]; then
+            log_info "系统正在重启..."
+            sudo reboot
+        else
+            log_warn "请稍后手动执行 reboot 重启生效。"
+        fi
+    else
+        log_error "卸载过程中出现错误，请检查 dpkg / apt 状态。"
+        return 1
+    fi
+}
+
+# ==============================================================================
+#  彻底卸载 bbr-v3-pro (清理快捷命令及所有残留)
+# ==============================================================================
+uninstall_everything() {
+    echo -e "\n${BOLD}================= 彻底卸载 bbr-v3-pro =================${PLAIN}"
+    echo -e "该操作将："
+    echo -e "  1. 清空所有持久化 sysctl 网络调优参数并重载系统默认值"
+    echo -e "  2. 移除系统快捷唤醒指令 ($QUICK_COMMAND_PATH)"
+    echo -e "  3. 删除临时下载目录与残留安全配置"
+    echo -e "--------------------------------------------------------"
+    read -p "确认彻底卸载本工具及所有网络配置吗？(y/n): " confirm_all
+    if [[ "$confirm_all" != "y" && "$confirm_all" != "Y" ]]; then
+        log_info "操作已取消。"
+        return 0
+    fi
+
+    clear_network_tuning
+    sudo rm -f "$QUICK_COMMAND_PATH" "$SECURITY_MODPROBE_CONF"
+    sudo rm -rf /tmp/bbr_kernel_install
+    log_success "bbr-v3-pro 工具与所有调优配置已彻底卸载完毕，系统已恢复纯净状态。"
+    exit 0
+}
+
+# ==============================================================================
 #  主菜单与交互调度
 # ==============================================================================
 show_menu() {
@@ -660,32 +736,36 @@ show_menu() {
     echo -e " 物理内存状态: ${GREEN}${METRIC_MEM_DISPLAY}${PLAIN}"
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${PLAIN}"
     echo -e "  ${BOLD}1.${PLAIN} 查看系统网络栈与内核状态 (含 BBRv3 检测)"
-    echo -e "  ${BOLD}2.${PLAIN} 启用 BBR + FQ"
-    echo -e "  ${BOLD}3.${PLAIN} 启用 BBR + CAKE (抗晚高峰网络拥堵、防队头阻塞)"
-    echo -e "  ${BOLD}4.${PLAIN} 应用 AI 网关与跨洋全栈优化 (TCP+UDP复合 / cliproxyapi + Hy2 预设)"
-    echo -e "  ${BOLD}5.${PLAIN} BBR v3 智能带宽动态调优 (按带宽与延迟动态计算 BDP)"
-    echo -e "  ${BOLD}6.${PLAIN} 应用亚太短链路低延迟调优 (精准小缓冲区)"
-    echo -e "  ${BOLD}7.${PLAIN} 检查系统 TCP / UDP 端口占用 (80 / 443 / 8443 / 自定义)"
-    echo -e "  ${BOLD}8.${PLAIN} 还原系统出厂网络设置 (彻底清空调优配置)"
-    echo -e "  ${BOLD}9.${PLAIN} 安装 / 更新 BBRv3 内核 (自建 / 个人 Release)"
+    echo -e "  ${BOLD}2.${PLAIN} 安装 / 更新 BBRv3 内核 (自建 / 个人 Release)"
+    echo -e "  ${BOLD}3.${PLAIN} 启用 BBR + FQ"
+    echo -e "  ${BOLD}4.${PLAIN} 启用 BBR + CAKE (抗晚高峰网络拥堵、防队头阻塞)"
+    echo -e "  ${BOLD}5.${PLAIN} 应用 AI 网关与跨洋全栈优化 (TCP+UDP复合 / 一键懒人预设)"
+    echo -e "  ${BOLD}6.${PLAIN} BBR v3 智能带宽动态调优 (按实际带宽与延迟计算 BDP)"
+    echo -e "  ${BOLD}7.${PLAIN} 应用亚太短链路低延迟调优 (精准小缓冲区)"
+    echo -e "  ${BOLD}8.${PLAIN} 检查系统 TCP / UDP 端口占用 (80 / 443 / 8443 / 自定义)"
+    echo -e "  ${BOLD}9.${PLAIN} 还原系统出厂网络设置 (清空所有 sysctl 调优配置)"
+    echo -e "  ${BOLD}10.${PLAIN} 卸载自建 BBRv3 内核 (安全回滚至官方原厂内核)"
+    echo -e "  ${BOLD}11.${PLAIN} 彻底卸载 bbr-v3-pro (清理快捷命令及所有残留)"
     echo -e "  ${BOLD}0.${PLAIN} 退出管理系统"
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${PLAIN}"
     echo -e "快捷唤醒指令: ${GREEN}bbr${PLAIN}"
     echo -e "----------------------------------------------------------------"
-    read -p "请输入功能编号 [0-9]: " opt
+    read -p "请输入功能编号 [0-11]: " opt
 
     case "$opt" in
         1) check_bbr_status ;;
-        2) apply_bbr_and_qdisc "bbr" "fq" ;;
-        3) apply_bbr_and_qdisc "bbr" "cake" ;;
-        4) apply_ai_gateway_tuning ;;
-        5) apply_smart_bandwidth_tuning ;;
-        6) apply_apac_tuning ;;
-        7) check_port_conflicts ;;
-        8) clear_network_tuning ;;
-        9) install_bbrv3_kernel "standard" ;;
+        2) install_bbrv3_kernel "standard" ;;
+        3) apply_bbr_and_qdisc "bbr" "fq" ;;
+        4) apply_bbr_and_qdisc "bbr" "cake" ;;
+        5) apply_ai_gateway_tuning ;;
+        6) apply_smart_bandwidth_tuning ;;
+        7) apply_apac_tuning ;;
+        8) check_port_conflicts ;;
+        9) clear_network_tuning ;;
+        10) uninstall_bbrv3_kernel ;;
+        11) uninstall_everything ;;
         0) exit 0 ;;
-        *) log_error "输入无效，请输入 [0-9]！" ;;
+        *) log_error "输入无效，请输入 [0-11]！" ;;
     esac
 
     echo ""
@@ -703,6 +783,10 @@ if [[ $# -gt 0 ]]; then
     case "$1" in
         --status)
             check_bbr_status
+            exit 0
+            ;;
+        --install-kernel)
+            install_bbrv3_kernel "standard"
             exit 0
             ;;
         --apply-bbr)
@@ -729,15 +813,26 @@ if [[ $# -gt 0 ]]; then
             check_port_conflicts
             exit 0
             ;;
+        --uninstall-kernel)
+            uninstall_bbrv3_kernel
+            exit 0
+            ;;
+        --uninstall-all)
+            uninstall_everything
+            exit 0
+            ;;
         --help|-h)
             echo "用法: $0 [选项]"
             echo "  --status              查看当前网络状态与内核版本"
+            echo "  --install-kernel      安装或更新最新 BBRv3 内核"
             echo "  --apply-bbr           启用系统原生 BBR + FQ"
             echo "  --tune=ai-gateway     应用 AI 网关与跨洋全栈优化 (TCP+UDP)"
             echo "  --tune=smart          应用智能 BDP 动态带宽优化"
             echo "  --tune=apac           应用亚太短链路优化"
             echo "  --clean               清空所有调优配置恢复出厂默认"
             echo "  --check-ports         检查关键端口占用状态"
+            echo "  --uninstall-kernel    安全卸载 BBRv3 内核并回滚"
+            echo "  --uninstall-all       彻底卸载工具与所有网络配置"
             exit 0
             ;;
         *)
