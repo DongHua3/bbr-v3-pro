@@ -3,6 +3,10 @@ set -euxo pipefail
 
 arch="${1:?usage: prepare-kernel-config.sh <x86_64|arm64>}"
 
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd -- "$script_dir/.." && pwd)"
+workspace="${GITHUB_WORKSPACE:-$repo_root}"
+
 run_olddefconfig() {
   if [ "$arch" = "arm64" ]; then
     timeout 300 make ARCH=arm64 olddefconfig < /dev/null
@@ -63,6 +67,19 @@ apply_policy_config() {
   scripts/config --disable INET6_ESP
   scripts/config --disable AF_RXRPC
   scripts/config --disable RXKAD
+
+  scripts/config --module HYPERV
+  scripts/config --enable HYPERV_TIMER
+  scripts/config --module HYPERV_UTILS
+  scripts/config --module HYPERV_BALLOON
+  scripts/config --module HYPERV_NET
+  scripts/config --module HYPERV_STORAGE
+  scripts/config --module HYPERV_KEYBOARD
+  scripts/config --module HID_HYPERV_MOUSE
+  scripts/config --module PCI_HYPERV
+  scripts/config --module PCI_HYPERV_INTERFACE
+  scripts/config --module DRM_HYPERV
+  scripts/config --module HYPERV_VSOCKETS
 }
 
 require_config_line() {
@@ -105,16 +122,28 @@ validate_config() {
   require_config_line 'CONFIG_IP_NF_NAT=m' 'CONFIG_IP_NF_NAT is not module-enabled.'
   require_config_line 'CONFIG_IP_NF_FILTER=m' 'CONFIG_IP_NF_FILTER is not module-enabled.'
   require_config_line 'CONFIG_IP_NF_TARGET_MASQUERADE=m' 'CONFIG_IP_NF_TARGET_MASQUERADE is not module-enabled.'
+  require_config_line 'CONFIG_HYPERV=m' 'CONFIG_HYPERV is not module-enabled.'
+  require_config_line 'CONFIG_HYPERV_TIMER=y' 'CONFIG_HYPERV_TIMER is not enabled.'
+  require_config_line 'CONFIG_HYPERV_UTILS=m' 'CONFIG_HYPERV_UTILS is not module-enabled.'
+  require_config_line 'CONFIG_HYPERV_BALLOON=m' 'CONFIG_HYPERV_BALLOON is not module-enabled.'
+  require_config_line 'CONFIG_HYPERV_NET=m' 'CONFIG_HYPERV_NET is not module-enabled.'
+  require_config_line 'CONFIG_HYPERV_STORAGE=m' 'CONFIG_HYPERV_STORAGE is not module-enabled.'
+  require_config_line 'CONFIG_HYPERV_KEYBOARD=m' 'CONFIG_HYPERV_KEYBOARD is not module-enabled.'
+  require_config_line 'CONFIG_HID_HYPERV_MOUSE=m' 'CONFIG_HID_HYPERV_MOUSE is not module-enabled.'
+  require_config_line 'CONFIG_PCI_HYPERV=m' 'CONFIG_PCI_HYPERV is not module-enabled.'
+  require_config_line 'CONFIG_PCI_HYPERV_INTERFACE=m' 'CONFIG_PCI_HYPERV_INTERFACE is not module-enabled.'
+  require_config_line 'CONFIG_DRM_HYPERV=m' 'CONFIG_DRM_HYPERV is not module-enabled.'
+  require_config_line 'CONFIG_HYPERV_VSOCKETS=m' 'CONFIG_HYPERV_VSOCKETS is not module-enabled.'
 
-  grep -E 'CONFIG_(DEBUG_INFO_NONE|TCP_CONG_BBR|DEFAULT_BBR|DEFAULT_TCP_CONG|NET_SCH_DEFAULT|NET_SCH_FQ|NET_SCH_FQ_CODEL|NET_SCH_PIE|NET_SCH_FQ_PIE|NET_SCH_CAKE|DEFAULT_FQ|DEFAULT_NET_SCH|NETFILTER_XTABLES_LEGACY|IP_NF_IPTABLES_LEGACY|IP_NF_NAT|IP_NF_FILTER|IP_NF_TARGET_MASQUERADE|IP6_NF_IPTABLES_LEGACY|IP6_NF_NAT|IP6_NF_FILTER)=' .config
+  grep -E 'CONFIG_(DEBUG_INFO_NONE|TCP_CONG_BBR|DEFAULT_BBR|DEFAULT_TCP_CONG|NET_SCH_DEFAULT|NET_SCH_FQ|NET_SCH_FQ_CODEL|NET_SCH_PIE|NET_SCH_FQ_PIE|NET_SCH_CAKE|DEFAULT_FQ|DEFAULT_NET_SCH|NETFILTER_XTABLES_LEGACY|IP_NF_IPTABLES_LEGACY|IP_NF_NAT|IP_NF_FILTER|IP_NF_TARGET_MASQUERADE|IP6_NF_IPTABLES_LEGACY|IP6_NF_NAT|IP6_NF_FILTER|HYPERV|HYPERV_TIMER|HYPERV_UTILS|HYPERV_BALLOON|HYPERV_NET|HYPERV_STORAGE|HYPERV_KEYBOARD|HID_HYPERV_MOUSE|PCI_HYPERV|PCI_HYPERV_INTERFACE|DRM_HYPERV|HYPERV_VSOCKETS)=' .config
 }
 
 case "$arch" in
   arm64)
-    cp "$GITHUB_WORKSPACE/arm64.config" .config
+    cp "$workspace/arm64.config" .config
     ;;
   x86_64)
-    cp "$GITHUB_WORKSPACE/x86-64.config" .config
+    cp "$workspace/x86-64.config" .config
     ;;
   *)
     echo "ERROR: unsupported arch: $arch"
@@ -128,6 +157,12 @@ apply_policy_config
 run_olddefconfig
 validate_config
 
-mkdir -p "$GITHUB_WORKSPACE/build-configs"
-cp .config "$GITHUB_WORKSPACE/build-configs/${arch}.config"
-cp .config "$GITHUB_WORKSPACE/build-configs/${arch}-${KERNEL_VERSION}.config"
+mkdir -p "$workspace/build-configs"
+cp .config "$workspace/build-configs/${arch}.config"
+kernel_version="${KERNEL_VERSION:-}"
+if [ -z "$kernel_version" ]; then
+  kernel_version="$(make -s kernelversion 2>/dev/null || true)"
+fi
+if [ -n "$kernel_version" ]; then
+  cp .config "$workspace/build-configs/${arch}-${kernel_version}.config"
+fi

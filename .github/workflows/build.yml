@@ -1,7 +1,18 @@
 name: 构建带有BBRv3的内核
 
-on:
+'on':
   workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: "Force rebuild even if releases already exist"
+        required: false
+        type: boolean
+        default: false
+      kernel_version:
+        description: "Specify kernel version (e.g. 6.14.2 or 6.14)"
+        required: false
+        type: string
+        default: ""
   schedule:
     # Daily automatic kernel refresh. BBRv3 itself stays pinned to the repo patch.
     - cron: "17 3 * * *"
@@ -26,17 +37,28 @@ jobs:
       kernel_version: ${{ steps.plan.outputs.kernel_version }}
       raw_kernel_version: ${{ steps.plan.outputs.raw_kernel_version }}
       build_needed: ${{ steps.plan.outputs.build_needed }}
+      force_rebuild: ${{ steps.plan.outputs.force_rebuild }}
     steps:
       - name: 检查最新内核和已发布版本
         id: plan
+        env:
+          INPUT_FORCE_REBUILD: ${{ inputs.force_rebuild }}
+          INPUT_KERNEL_VERSION: ${{ inputs.kernel_version }}
         run: |
           set -euo pipefail
 
-          raw_version=$(curl -fsSL https://www.kernel.org/finger_banner \
-            | awk -F: '/latest stable version/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}')
-          if [ -z "$raw_version" ]; then
-            echo "Failed to read latest stable kernel version from kernel.org." >&2
-            exit 1
+          force_rebuild="${INPUT_FORCE_REBUILD:-false}"
+          user_kernel_version=$(echo "${INPUT_KERNEL_VERSION:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^v//')
+
+          if [ -n "$user_kernel_version" ]; then
+            raw_version="$user_kernel_version"
+          else
+            raw_version=$(curl -fsSL https://www.kernel.org/finger_banner \
+              | awk -F: '/latest stable version/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}')
+            if [ -z "$raw_version" ]; then
+              echo "Failed to read latest stable kernel version from kernel.org." >&2
+              exit 1
+            fi
           fi
 
           version="$raw_version"
@@ -50,26 +72,32 @@ jobs:
 
           echo "raw_kernel_version=$raw_version" >> "$GITHUB_OUTPUT"
           echo "kernel_version=$version" >> "$GITHUB_OUTPUT"
+          echo "force_rebuild=$force_rebuild" >> "$GITHUB_OUTPUT"
 
-          missing=0
-          for arch in x86_64 arm64; do
-            for suffix in "" "-max"; do
-              tag="$arch-$version$suffix"
-              if gh release view "$tag" >/dev/null 2>&1; then
-                echo "$tag already exists."
-              else
-                echo "$tag is missing."
-                missing=1
-              fi
-            done
-          done
-
-          if [ "$missing" -eq 0 ]; then
-            echo "build_needed=false" >> "$GITHUB_OUTPUT"
-            echo "All releases for $version already exist; ending workflow before build."
-          else
+          if [ "$force_rebuild" = "true" ]; then
             echo "build_needed=true" >> "$GITHUB_OUTPUT"
-            echo "At least one release for $version is missing; build will continue."
+            echo "force_rebuild is enabled; skipping release check and forcing build."
+          else
+            missing=0
+            for arch in x86_64 arm64; do
+              for suffix in "" "-max"; do
+                tag="$arch-$version$suffix"
+                if gh release view "$tag" >/dev/null 2>&1; then
+                  echo "$tag already exists."
+                else
+                  echo "$tag is missing."
+                  missing=1
+                fi
+              done
+            done
+
+            if [ "$missing" -eq 0 ]; then
+              echo "build_needed=false" >> "$GITHUB_OUTPUT"
+              echo "All releases for $version already exist; ending workflow before build."
+            else
+              echo "build_needed=true" >> "$GITHUB_OUTPUT"
+              echo "At least one release for $version is missing; build will continue."
+            fi
           fi
 
   cleanup:
@@ -118,12 +146,16 @@ jobs:
     env:
       ARCH: ${{ matrix.arch }}
       KERNEL_VERSION: ${{ needs.preflight.outputs.kernel_version }}
+      FORCE_REBUILD: ${{ needs.preflight.outputs.force_rebuild }}
     steps:
       - name: 检查是否已发布
         id: check_release
         run: |
           tag="${{ matrix.arch }}-${{ env.KERNEL_VERSION }}${{ matrix.release_suffix }}"
-          if gh release view "$tag" >/dev/null 2>&1; then
+          if [ "${FORCE_REBUILD:-false}" = "true" ]; then
+            echo "BUILD_NEEDED=true" >> "$GITHUB_ENV"
+            echo "FORCE_REBUILD is enabled; building latest kernel with ${{ matrix.profile_name }} even if $tag exists."
+          elif gh release view "$tag" >/dev/null 2>&1; then
             echo "BUILD_NEEDED=false" >> "$GITHUB_ENV"
             echo "$tag already exists; skipping build."
           else
@@ -291,7 +323,12 @@ jobs:
         if: env.BUILD_NEEDED == 'true'
         run: |
           tag="${{ matrix.arch }}-${KERNEL_VERSION}${{ matrix.release_suffix }}"
-          if gh release view "$tag" >/dev/null 2>&1; then
+          if [ "${FORCE_REBUILD:-false}" = "true" ]; then
+            echo "PUBLISH_NEEDED=true" >> "$GITHUB_ENV"
+            mkdir -p ./publish-markers
+            touch "./publish-markers/${{ matrix.arch }}-${{ matrix.profile }}"
+            echo "FORCE_REBUILD is enabled; publishing this build regardless of existing release."
+          elif gh release view "$tag" >/dev/null 2>&1; then
             echo "PUBLISH_NEEDED=false" >> "$GITHUB_ENV"
             echo "$tag was published while this job was running; skipping upload and release."
           else
@@ -337,6 +374,8 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
 
       - name: 下载本轮最终配置
         uses: actions/download-artifact@v4
@@ -383,4 +422,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add x86-64.config arm64.config
           git commit -m "Refresh generated kernel config baselines [skip ci]"
-          git push
+          git pull --rebase origin "${{ github.ref_name }}" || true
+          git push origin "HEAD:${{ github.ref_name }}"

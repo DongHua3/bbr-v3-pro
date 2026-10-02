@@ -20,3 +20,12 @@
 _*.py
 _*.sh
 scratch/
+
+# Python 缓存与测试临时产物
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# 协作记录与中间过程目录
+.agents/

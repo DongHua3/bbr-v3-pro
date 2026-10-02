@@ -17,19 +17,23 @@ set -u
 #   修订号 缺陷修复、文案与显示修正
 BBR_SCRIPT_VERSION="1.3.0"
 
+# GitHub 仓库配置 (支持环境变量覆盖)
+UPSTREAM_REPO="DongHua3/bbr-v3-pro"
+GITHUB_REPO="${GITHUB_REPO:-${BBR_REPO:-$UPSTREAM_REPO}}"
+
 # ==============================================================================
 #  自更新：把快捷命令更新到最新版
 #  返回 0=成功/已最新，1=失败或被拒绝
 #
 #  注意：本函数定义在脚本顶部，因为 --update 参数分支在 root 与发行版检查
 #  之前就要用到它（更新自身不应依赖被更新的环境）。
-#  这里用字面路径与字面 URL，不依赖 QUICK_COMMAND_PATH / GITHUB_REPO 常量
-#  （它们在本段之后才定义）。
+#  仓库配置已在上方提前初始化，目标路径使用字面路径（不依赖稍后定义的 QUICK_COMMAND_PATH）。
 # ==============================================================================
 self_update() {
     local force="${1:-0}"
     local target="/usr/local/bin/bbr"
-    local url="https://raw.githubusercontent.com/DongHua3/bbr-v3-pro/main/install.sh"
+    local repo="${GITHUB_REPO:-$UPSTREAM_REPO}"
+    local url="https://raw.githubusercontent.com/${repo}/main/install.sh"
     local tmp new tver
     echo "当前版本: v$BBR_SCRIPT_VERSION"
     echo "正在获取最新版..."
@@ -119,11 +123,31 @@ log_error()   { echo -e "${RED}[ERROR]${PLAIN} $*"; }
 # modprobe、模块探测被误判为失败（明明权限足够）。
 # 因此统一走 $SUDO：root 下为空，非 root 下为 sudo。
 # 注意：必须在任何引用 $SUDO 的代码之前定义（set -u 下引用未定义变量会直接退出）。
-if [[ $EUID -eq 0 ]] && ! command -v sudo >/dev/null 2>&1; then
+if [[ $EUID -eq 0 ]]; then
     SUDO=""
 else
     SUDO="sudo"
 fi
+
+show_help() {
+    echo "bbr-v3-pro v$BBR_SCRIPT_VERSION"
+    echo "用法: $0 [选项]"
+    echo "  --version             查看脚本版本"
+    echo "  --update [--force]    把快捷命令 bbr 更新到最新版（--force 强制覆盖）"
+    echo "  --status              查看当前网络状态与内核版本"
+    echo "  --install-kernel      安装/更新 BBRv3 内核（标准版）"
+    echo "  --install-kernel=max  安装 BBRv3 Max 激进吞吐内核（仅测速实验）"
+    echo "  --apply-bbr           启用系统原生 BBR + FQ"
+    echo "  --tune=ai-gateway     应用 AI 网关与跨洋全栈优化（推荐默认）"
+    echo "  --tune=smart          应用智能 BDP 动态带宽优化"
+    echo "  --tune=apac           应用亚太短链路低延迟优化"
+    echo "  --check-ports         检查关键端口占用状态"
+    echo "  --clean               清空所有调优配置恢复出厂默认"
+    echo "  --mitigate-cve        应用 Dirty Frag 与 CVE-2026-31431 安全缓解 (写入黑名单并卸载高危模块)"
+    echo "  --uninstall-kernel    安全卸载 BBRv3 内核并回滚引导"
+    echo "  --uninstall-all       彻底卸载工具与所有网络配置"
+    echo "  --help                查看此帮助信息"
+}
 
 # 信息类参数提前处理：不依赖 root 与发行版，非 Debian 或普通用户也能查
 if [[ $# -gt 0 ]]; then
@@ -141,21 +165,7 @@ if [[ $# -gt 0 ]]; then
             exit $?
             ;;
         --help|-h)
-            echo "bbr-v3-pro v$BBR_SCRIPT_VERSION"
-            echo "用法: $0 [选项]"
-            echo "  --version             查看脚本版本"
-            echo "  --update [--force]    把快捷命令 bbr 更新到最新版（--force 强制覆盖）"
-            echo "  --status              查看当前网络状态与内核版本"
-            echo "  --install-kernel      安装/更新 BBRv3 内核（标准版）"
-            echo "  --install-kernel=max  安装 BBRv3 Max 激进吞吐内核（仅测速实验）"
-            echo "  --apply-bbr           启用 BBR + FQ"
-            echo "  --tune=ai-gateway     应用 AI 网关与跨洋全栈优化（推荐默认）"
-            echo "  --tune=smart          应用智能 BDP 动态带宽优化"
-            echo "  --tune=apac           应用亚太短链路低延迟优化"
-            echo "  --check-ports         检查关键端口占用"
-            echo "  --clean               清空网络调优配置"
-            echo "  --uninstall-kernel    卸载 BBRv3 内核并回滚引导"
-            echo "  --uninstall-all       彻底卸载工具与所有网络配置"
+            show_help
             exit 0
             ;;
     esac
@@ -188,7 +198,7 @@ QUICK_COMMAND_PATH="/usr/local/bin/bbr"
 
 # GitHub 仓库配置 (支持环境变量覆盖)
 UPSTREAM_REPO="DongHua3/bbr-v3-pro"
-GITHUB_REPO="${BBR_REPO:-$UPSTREAM_REPO}"
+GITHUB_REPO="${GITHUB_REPO:-${BBR_REPO:-$UPSTREAM_REPO}}"
 GITHUB_API_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 
 # 依赖修复与检查
@@ -282,6 +292,18 @@ is_self_script_file() {
     case "$f" in
         /dev/fd/*|/proc/*|bash|sh|dash|-bash|sudo) return 1 ;;
     esac
+
+    # 规范化相对路径（如 ./install.sh）为绝对路径
+    if [[ "$f" != /* ]]; then
+        if command -v realpath >/dev/null 2>&1; then
+            f="$(realpath "$f" 2>/dev/null || echo "$f")"
+        elif command -v readlink >/dev/null 2>&1; then
+            f="$(readlink -f "$f" 2>/dev/null || echo "$f")"
+        elif [[ -e "$f" ]]; then
+            f="$(cd "$(dirname "$f")" 2>/dev/null && pwd -P)/$(basename "$f")"
+        fi
+    fi
+
     [[ "$f" == /* && -f "$f" && -r "$f" ]] || return 1
     head -n 1 "$f" 2>/dev/null | grep -Eq '^#!.*\b(bash|sh)\b' || return 1
     # 内容指纹：确认是本项目管理脚本，避免把无关脚本装成 bbr
@@ -295,6 +317,16 @@ ensure_quick_command() {
 
     # 函数内用 BASH_SOURCE 比 $0 可靠，退化到 $0
     local self="${BASH_SOURCE[0]:-$0}"
+    if [[ -n "$self" && "$self" != /* ]]; then
+        if command -v realpath >/dev/null 2>&1; then
+            self="$(realpath "$self" 2>/dev/null || echo "$self")"
+        elif command -v readlink >/dev/null 2>&1; then
+            self="$(readlink -f "$self" 2>/dev/null || echo "$self")"
+        elif [[ -e "$self" ]]; then
+            self="$(cd "$(dirname "$self")" 2>/dev/null && pwd -P)/$(basename "$self")"
+        fi
+    fi
+
     if is_self_script_file "$self"; then
         if cp -f "$self" "$QUICK_COMMAND_PATH" && chmod 755 "$QUICK_COMMAND_PATH"; then
             return 0
@@ -346,6 +378,7 @@ ensure_security_rule() {
 }
 
 apply_security_mitigations() {
+    local unload_modules="${1:-0}"
     local changed=0 managed_marker="# Managed by bbr-v3-pro"
 
     $SUDO touch "$SECURITY_MODPROBE_CONF" 2>/dev/null || {
@@ -383,17 +416,19 @@ apply_security_mitigations() {
         ensure_security_rule "install algif_aead /bin/false" changed
     fi
 
-    # 已加载的模块尝试立即卸载，被占用则等重启后由黑名单生效
-    local mod
-    for mod in esp4 esp6 rxrpc algif_aead; do
-        if lsmod 2>/dev/null | grep -q "^${mod}"; then
-            if $SUDO modprobe -r "$mod" 2>/dev/null; then
-                log_info "已卸载模块 $mod，当前会话缓解已生效。"
-            else
-                log_warn "模块 $mod 正被占用，黑名单将在重启后生效。"
+    # 已加载的模块仅在显式请求时卸载，避免菜单启动时打断已有 IPsec VPN 隧道
+    if (( unload_modules )); then
+        local mod
+        for mod in esp4 esp6 rxrpc algif_aead; do
+            if lsmod 2>/dev/null | grep -q "^${mod}"; then
+                if $SUDO modprobe -r "$mod" 2>/dev/null; then
+                    log_info "已卸载模块 $mod，当前会话缓解已生效。"
+                else
+                    log_warn "模块 $mod 正被占用，黑名单将在重启后生效。"
+                fi
             fi
-        fi
-    done
+        done
+    fi
 
     if (( changed )); then
         log_success "安全缓解规则已写入: $SECURITY_MODPROBE_CONF"
@@ -812,7 +847,6 @@ apply_ai_gateway_tuning() {
     SKIP_TCP_MEM=0
     sysctl_apply_verify net.core.rmem_max "$TARGET_SOCKET_BYTES"
     sysctl_apply_verify net.core.wmem_max "$TARGET_SOCKET_BYTES"
-    sysctl_apply_verify net.core.netdev_max_backlog "10000"
     sysctl_apply_verify net.core.netdev_max_backlog "$TARGET_BACKLOG"
     apply_safe_somaxconn
     sysctl_apply_verify net.ipv4.tcp_rmem "4096 87380 $TARGET_SOCKET_BYTES"
@@ -953,20 +987,35 @@ apply_apac_tuning() {
     log_info "正在应用亚太短链路低延迟调优 (RTT < 80ms)..."
     get_safe_memory_limits
 
+    local algo="bbr"
+    local qdisc="fq"
+    local output_bytes="4194304"
+
     local apac_buffer=$(( 8 * 1024 * 1024 ))
     if (( apac_buffer > MAX_SOCKET_BYTES )); then
         apac_buffer=$MAX_SOCKET_BYTES
     fi
 
-    # 算法归 qdisc 段，本函数只负责 tune 段
+    # 算法归 qdisc 段，本函数负责完整生效 BBR + FQ
+    apply_bbr_and_qdisc "$algo" "$qdisc"
+
+    # 1. 运行时立即应用并回读校验
+    sysctl_apply_verify net.core.rmem_max "$apac_buffer"
+    sysctl_apply_verify net.core.wmem_max "$apac_buffer"
+    sysctl_apply_verify net.ipv4.tcp_rmem "4096 131072 $apac_buffer"
+    sysctl_apply_verify net.ipv4.tcp_wmem "4096 16384 $apac_buffer"
+    sysctl_apply_verify net.ipv4.tcp_slow_start_after_idle "0"
+    sysctl_apply_verify net.ipv4.tcp_limit_output_bytes "$output_bytes"
+
+    # 2. 持久化写入（只替换 tune 段）
     replace_sysctl_section "tune" <<EOF
 # bbr-v3-pro: APAC Low-Latency Tuning
 net.core.rmem_max = $apac_buffer
 net.core.wmem_max = $apac_buffer
-net.ipv4.tcp_wmem = 4096 16384 $apac_buffer
 net.ipv4.tcp_rmem = 4096 131072 $apac_buffer
+net.ipv4.tcp_wmem = 4096 16384 $apac_buffer
 net.ipv4.tcp_slow_start_after_idle = 0
-net.ipv4.tcp_limit_output_bytes = 4194304
+net.ipv4.tcp_limit_output_bytes = $output_bytes
 EOF
 
     $SUDO sysctl --system >/dev/null 2>&1
@@ -989,6 +1038,7 @@ clear_network_tuning() {
     for key in net.core.default_qdisc net.ipv4.tcp_congestion_control \
                net.core.rmem_max net.core.wmem_max net.core.netdev_max_backlog \
                net.core.somaxconn net.ipv4.tcp_rmem net.ipv4.tcp_wmem \
+               net.ipv4.tcp_mem \
                net.ipv4.tcp_limit_output_bytes net.ipv4.tcp_slow_start_after_idle \
                net.ipv4.tcp_notsent_lowat net.ipv4.tcp_window_scaling \
                net.ipv4.tcp_mtu_probing; do
@@ -1066,28 +1116,26 @@ check_port_conflicts() {
 #  BBRv3 版本判定
 #  背景: 本项目内核把拥塞控制编进内核 (CONFIG_TCP_CONG_BBR=y)，
 #  内建模块没有独立 .ko，modinfo 取不到内容，只靠 modinfo 会必然误判为
-#  "非 v3"。因此增加 sysfs / 内核配置文件两条交叉验证路径。
+#  "非 v3"。因此增加 sysfs version 与内核发行版本命名两条交叉验证路径。
 # ==============================================================================
 bbr_is_v3() {
-    local bbr_mod bbr_ver cfg
+    local bbr_mod bbr_ver krel
     bbr_mod=$(modinfo tcp_bbr 2>/dev/null || true)
     bbr_ver=$(echo "$bbr_mod" | awk '/^version:/ {print $2}')
     [[ "$bbr_ver" == "3" ]] && return 0
 
-    # 内建模块没有 .ko，但同样会在 sysfs 注册（部分内核带 version 属性）
-    [[ -d /sys/module/tcp_bbr ]] || return 1
-
+    # sysfs version 强校验
     if [[ -r /sys/module/tcp_bbr/version ]]; then
         [[ "$(cat /sys/module/tcp_bbr/version 2>/dev/null)" == "3" ]] && return 0
         return 1
     fi
 
-    # 无 version 属性时，用构建期保证的配置项交叉验证（二者同时成立才算 v3）
-    cfg="/boot/config-$(uname -r)"
-    [[ -r "$cfg" ]] || return 1
-    grep -qx 'CONFIG_TCP_CONG_BBR=y' "$cfg" \
-        && grep -qx 'CONFIG_DEFAULT_TCP_CONG="bbr"' "$cfg" \
-        && return 0
+    # 内核发行版本强校验（杜绝官方原版 BBRv1 内核误报，如 6.12.0-bbrv3 或 6.12.0-bbrv3-max）
+    krel="$(uname -r 2>/dev/null || true)"
+    if [[ "$krel" =~ -bbrv3 ]]; then
+        return 0
+    fi
+
     return 1
 }
 
@@ -1138,7 +1186,7 @@ get_network_metrics() {
 
     local mem_total
     mem_total=$(awk '/MemTotal:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo "0")
-    if [ -f "$SYSCTL_CONF" ]; then
+    if [[ -f "$SYSCTL_CONF" ]] && grep -Eq '^[[:space:]]*net\.ipv4\.tcp_mem[[:space:]]*=' "$SYSCTL_CONF" 2>/dev/null; then
         METRIC_MEM_DISPLAY="${mem_total} MB (已开启 40% 防 OOM 保护)"
     else
         METRIC_MEM_DISPLAY="${mem_total} MB (系统默认)"
@@ -1497,7 +1545,7 @@ uninstall_bbrv3_kernel() {
 
     # 安全断言：检查系统内是否保留官方/通用兜底内核
     local fallback_kernels
-    fallback_kernels=$(dpkg -l 2>/dev/null | awk '/^ii/ && $2 ~ /^linux-image-[0-9]/ && ($2 !~ /bbrv3/ && $2 !~ /joeyblog/) {print $2}' | tr '\n' ' ')
+    fallback_kernels=$(dpkg -l 2>/dev/null | awk '/^ii/ && $2 ~ /^linux-image-(unsigned-)?[0-9]/ && ($2 !~ /bbrv3/ && $2 !~ /joeyblog/) {print $2}' | tr '\n' ' ')
 
     if [[ -z "$fallback_kernels" ]]; then
         log_error "【高危拦截】系统未检测到任何官方备用内核！"
@@ -1679,6 +1727,10 @@ if [[ $# -gt 0 ]]; then
             clear_network_tuning
             exit 0
             ;;
+        --mitigate-cve)
+            apply_security_mitigations 1
+            exit 0
+            ;;
         --check-ports)
             check_port_conflicts
             exit 0
@@ -1692,20 +1744,7 @@ if [[ $# -gt 0 ]]; then
             exit 0
             ;;
         --help|-h)
-            echo "bbr-v3-pro v$BBR_SCRIPT_VERSION"
-            echo "用法: $0 [选项]"
-            echo "  --version             查看脚本版本"
-            echo "  --status              查看当前网络状态与内核版本"
-            echo "  --install-kernel      安装或更新最新 BBRv3 内核（标准版）"
-            echo "  --install-kernel=max  安装最新 BBRv3 Max 激进吞吐内核（仅测速实验）"
-            echo "  --apply-bbr           启用系统原生 BBR + FQ"
-            echo "  --tune=ai-gateway     应用 AI 网关与跨洋全栈优化 (TCP+UDP)"
-            echo "  --tune=smart          应用智能 BDP 动态带宽优化"
-            echo "  --tune=apac           应用亚太短链路优化"
-            echo "  --clean               清空所有调优配置恢复出厂默认"
-            echo "  --check-ports         检查关键端口占用状态"
-            echo "  --uninstall-kernel    安全卸载 BBRv3 内核并回滚"
-            echo "  --uninstall-all       彻底卸载工具与所有网络配置"
+            show_help
             exit 0
             ;;
         *)
@@ -1725,6 +1764,7 @@ if [[ $# -gt 0 ]]; then
                 -install-kernel|install-kernel)     _arg_suggest="--install-kernel" ;;
                 -apply-bbr|apply-bbr)               _arg_suggest="--apply-bbr" ;;
                 -clean|clean)                       _arg_suggest="--clean" ;;
+                -mitigate-cve|mitigate-cve|--mitigate) _arg_suggest="--mitigate-cve" ;;
                 -check-ports|check-ports)           _arg_suggest="--check-ports" ;;
                 -uninstall-kernel|uninstall-kernel) _arg_suggest="--uninstall-kernel" ;;
                 -uninstall-all|uninstall-all)       _arg_suggest="--uninstall-all" ;;
@@ -1739,8 +1779,8 @@ if [[ $# -gt 0 ]]; then
     esac
 fi
 
-# 交互模式：进入菜单前注册快捷命令并应用安全缓解
+# 交互模式：进入菜单前注册快捷命令并应用安全缓解（不主动卸载模块，防打断 IPsec 隧道）
 ensure_quick_command
-apply_security_mitigations
+apply_security_mitigations 0
 
 show_menu

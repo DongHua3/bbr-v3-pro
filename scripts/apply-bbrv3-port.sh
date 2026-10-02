@@ -22,7 +22,7 @@ if [[ ! -f "$patch_file" ]]; then
   # 基本不变，冲突通常只是行号偏移，直接硬退出会让整条流水线停摆到有人手工补文件。
   # 这里回退到版本号最大的那份旧补丁，配合下面的模糊应用去试；真冲突仍会失败。
   fallback_patch=$(ls "$repo_root"/patches/bbrv3-linux-*.patch 2>/dev/null \
-    | sort -t- -k3 -V | tail -n 1)
+    | sort -V | tail -n 1)
   if [[ -z "$fallback_patch" ]]; then
     echo "BBRv3 patch not found for linux-$kernel_version.y: $patch_file" >&2
     echo "Add a matching patches/bbrv3-linux-$kernel_version.patch before building this kernel series." >&2
