@@ -167,10 +167,6 @@ if [[ $# -gt 0 ]]; then
             show_help
             exit 0
             ;;
-        --install-kernel=max|--install-kernel-max|-install-kernel=max|install-kernel=max)
-            log_error "BBRv3 Max 激进内核已被彻底废弃并移除，请使用 --install-kernel 安装生产级稳定 BBRv3 内核。"
-            exit 1
-            ;;
     esac
 fi
 
@@ -1343,10 +1339,6 @@ fetch_kernel_assets() {
 }
 
 install_bbrv3_kernel() {
-    if [[ "${1:-}" == "max" ]]; then
-        log_error "BBRv3 Max 激进内核已被彻底废弃并移除，请使用 --install-kernel 安装生产级稳定 BBRv3 内核。"
-        return 1
-    fi
     assert_supported_kernel_install_system || return 1
 
     local target_repo="${GITHUB_REPO}"
@@ -1685,10 +1677,6 @@ if [[ $# -gt 0 ]]; then
         --install-kernel)
             install_bbrv3_kernel
             exit 0
-            ;;
-        --install-kernel=max|--install-kernel-max|-install-kernel=max|install-kernel=max)
-            log_error "BBRv3 Max 激进内核已被彻底废弃并移除，请使用 --install-kernel 安装生产级稳定 BBRv3 内核。"
-            exit 1
             ;;
         --apply-bbr)
             apply_bbr_and_qdisc "bbr" "fq"
