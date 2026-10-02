@@ -49,6 +49,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/DongHua3/bbr-v3-pro/main/ins
 
 首次运行会自动装好快捷命令，之后直接输入 `bbr` 就能打开菜单。
 
+> ⚠️ 注意：上面这条命令是**一次性执行**，它不会更新已装好的快捷命令 `bbr`。
+> 想让 `bbr` 用上最新版，执行 `bbr --update`（见下）。
+
 ### 方式二：命令行参数（适合脚本 / 批量运维）
 
 ```bash
@@ -57,6 +60,23 @@ curl -fsSL -o /tmp/bbr.sh https://raw.githubusercontent.com/DongHua3/bbr-v3-pro/
 
 sudo bash /tmp/bbr.sh --status
 ```
+
+### 更新与版本
+
+脚本自带版本号，用 `bbr --version` 或 `bbr --status` 查看。
+
+```bash
+bbr --version        # bbr-v3-pro v1.1.1
+bbr --update          # 一条命令把快捷命令更新到最新版
+```
+
+`--update` 会：下载最新脚本 → 校验内容确为本项目脚本 → 比较版本 → 覆盖 `/usr/local/bin/bbr` 并恢复权限。
+
+版本相同时会提示"已是最新版本"并退出，不做无谓写入。
+
+> **关于 CDN 缓存**：`raw.githubusercontent.com` 的边缘缓存不尊重 `Cache-Control: no-cache`，刚发布新版本后可能几分钟内仍返回旧文件。`--update` 已处理这种情况——若远端版本**低于**本地，会拒绝覆盖并提示，避免把新脚本降级成旧版。
+>
+> 确认要强制覆盖（例如回退版本）时：`bbr --update --force`
 
 ### 环境要求
 
@@ -84,6 +104,7 @@ sudo bash /tmp/bbr.sh --status
 
 ```
 ==================== BBR 状态与系统体检 ====================
+脚本版本       : 1.1.1
 系统内核版本   : 6.1.0-50-amd64
 TCP 拥塞控制   : cubic
 UDP 套接字缓冲 : 8192 KB (系统默认)
@@ -231,10 +252,16 @@ sudo reboot
 | 命令 | 作用 |
 |---|---|
 | `--status` | 查看内核、算法、队列、内存、安全缓解状态 |
+| `--version` | 查看脚本版本 |
+| `--update [--force]` | 把快捷命令 `bbr` 更新到最新版（`--force` 强制覆盖）|
 | `--check-ports` | 检查 80/443/8443 端口占用，排查服务冲突 |
 | `--clean` | 清空所有网络调优配置 |
 | `--uninstall-all` | 彻底卸载工具本身 |
 | `--help` | 查看全部参数 |
+
+> `--version` 与 `--help` 不要求 root，普通用户也能执行。
+>
+> `--status` 与菜单顶部都会显示**脚本版本**，便于判断本地副本是否为最新。
 
 ### 调优参数明细
 
@@ -543,12 +570,35 @@ BBR_ALLOW_UPSTREAM=1 BBR_REPO="你的用户名/bbr-v3-pro" sudo bash /tmp/bbr.sh
 
 ### 快捷命令 `bbr` 会不会自动更新？
 
-**不会。** 它是首次运行时缓存的一份副本。想用最新版：
+**不会。** 它是首次运行时缓存的一份副本——这样设计是为了**离线可用、启动快**，代价是需要手动更新：
 
 ```bash
-curl -fsSL -o /usr/local/bin/bbr https://raw.githubusercontent.com/DongHua3/bbr-v3-pro/main/install.sh
-chmod 755 /usr/local/bin/bbr
+bbr --update
 ```
+
+一条命令完成：下载 → 校验内容 → 比较版本 → 覆盖 → 恢复权限。
+
+如果提示"已是最新版本"但你认为上游确实更新了，通常是 raw CDN 缓存未刷新，等几分钟重试即可。确认要强制覆盖：
+
+```bash
+bbr --update --force
+```
+
+### 怎么知道我的 `bbr` 是不是最新版？
+
+```bash
+bbr --version
+```
+
+对比 GitHub 上 `install.sh` 里的 `BBR_SCRIPT_VERSION`（或仓库的版本标签）即可。
+
+`bbr --status` 和菜单顶部也会显示脚本版本，一眼可见。
+
+### 每次重新执行那条 `bash <(curl ...)` 命令，要重新给执行权限吗？
+
+**不需要。** `chmod` 改的是文件属性，设一次就永久保留。
+
+另外，用 `bash /usr/local/bin/bbr` 这种方式调用只需要**读权限**，连执行权限都不需要。
 
 ### 支持 Alpine / CentOS / 其它发行版吗？
 
