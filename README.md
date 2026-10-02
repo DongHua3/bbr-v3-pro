@@ -419,8 +419,8 @@ BBR_REPO="你的用户名/bbr-v3-pro" sudo bash /tmp/bbr.sh --install-kernel
 若要在独立 Linux 机器上本地编译 BBRv3 内核，请按以下步骤操作：
 
 ```bash
-# 1. 克隆 Linux 稳定版内核源码（以 6.12.y 为例）并进入源码目录
-git clone --depth=1 --branch linux-6.12.y https://github.com/gregkh/linux.git kernel/linux
+# 1. 克隆 Linux 稳定版内核源码（以 7.2.y 为例，与 patches/ 提供的补丁对齐）并进入源码目录
+git clone --depth=1 --branch linux-7.2.y https://github.com/gregkh/linux.git kernel/linux
 cd kernel/linux
 
 # 2. 应用 BBRv3 主线内核移植补丁

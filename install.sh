@@ -167,6 +167,10 @@ if [[ $# -gt 0 ]]; then
             show_help
             exit 0
             ;;
+        --install-kernel=max|--install-kernel-max|-install-kernel=max|install-kernel=max)
+            log_error "BBRv3 Max 激进内核已被彻底废弃并移除，请使用 --install-kernel 安装生产级稳定 BBRv3 内核。"
+            exit 1
+            ;;
     esac
 fi
 

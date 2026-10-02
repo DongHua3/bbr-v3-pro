@@ -263,3 +263,20 @@ def test_r4_t4_dry_run_is_self_script_file(install_script_path: Path):
     """
     res2 = run_bash_cmd(snippet)
     assert res2.returncode == 0, f"is_self_script_file failed to validate install.sh: {res2.stderr}"
+
+
+def test_r4_t2_max_kernel_deprecation_rejection(install_script_path: Path, install_script_content: str):
+    """Tier 2: Verify --install-kernel=max and aliases are rejected with friendly deprecation error."""
+    # 1. Assert content directly in install.sh contains friendly deprecation guidance
+    assert "BBRv3 Max 激进内核已被彻底废弃并移除，请使用 --install-kernel" in install_script_content
+    assert "--install-kernel=max|--install-kernel-max" in install_script_content
+
+    # 2. Dynamic execution assertions for returncode 1 and error message keywords
+    for flag in ["--install-kernel=max", "--install-kernel-max"]:
+        cmd = f"bash '{to_posix_path(install_script_path)}' {flag}"
+        res = run_bash_cmd(cmd)
+        assert res.returncode == 1, f"Expected returncode 1 for {flag}, got {res.returncode}"
+        combined_output = res.stdout + res.stderr
+        assert "BBRv3 Max" in combined_output, f"Missing 'BBRv3 Max' in output for {flag}"
+        assert "--install-kernel" in combined_output, f"Missing '--install-kernel' in output for {flag}"
+
