@@ -15,7 +15,7 @@ set -u
 #   主版本 不兼容变更（配置文件路径、CLI 参数语义、菜单编号调整）
 #   次版本 新增功能（新调优预设、新 CLI 参数、新检查项）
 #   修订号 缺陷修复、文案与显示修正
-BBR_SCRIPT_VERSION="2.0.0"
+BBR_SCRIPT_VERSION="2.0.1"
 
 # GitHub 仓库配置 (支持环境变量覆盖)
 UPSTREAM_REPO="DongHua3/bbr-v3-pro"

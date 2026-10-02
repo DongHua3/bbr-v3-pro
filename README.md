@@ -90,7 +90,7 @@ sudo bash /tmp/bbr.sh --status
 脚本自带语义化版本号，用 `bbr --version` 或 `bbr --status` 查看。
 
 ```bash
-bbr --version        # bbr-v3-pro v2.0.0
+bbr --version        # bbr-v3-pro v2.0.1
 bbr --update         # 一条命令把快捷命令更新到最新版
 ```
 
@@ -124,7 +124,7 @@ sudo bash /tmp/bbr.sh --status
 输出示例：
 ```text
 ==================== BBR 状态与系统体检 ====================
-脚本版本       : 2.0.0
+脚本版本       : 2.0.1
 系统内核版本   : 6.1.0-50-amd64
 TCP 拥塞控制   : cubic
 UDP 套接字缓冲 : 8192 KB (系统默认)
@@ -515,11 +515,11 @@ bbr-v3-pro/
 ├── scripts/
 │   ├── apply-bbrv3-port.sh       # 补丁安全版本排序 (sort -V) 与模糊匹配
 │   └── prepare-kernel-config.sh  # 内核配置策略注入与自寻址准备
-├── tests/                        # 自动化回归与端到端测试套件 (174 项用例)
+├── tests/                        # 自动化回归与端到端测试套件 (176 项用例)
 ├── arm64.config                  # ARM64 内核配置 (含 12 项 Hyper-V 驱动)
 ├── x86-64.config                 # x86_64 内核配置 (含 12 项 Hyper-V 驱动)
 ├── cve_2026_31431_detector.py    # 运行态 CVE 检测脚本 (防主动装载)
-├── install.sh                    # 核心管理脚本 (v2.0.0)
+├── install.sh                    # 核心管理脚本 (v2.0.1)
 ├── LICENSE                       # MIT 开源协议
 └── README.md                     # 完整技术手册与使用指南
 ```
