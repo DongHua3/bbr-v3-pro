@@ -15,7 +15,7 @@ set -u
 #   主版本 不兼容变更（配置文件路径、CLI 参数语义、菜单编号调整）
 #   次版本 新增功能（新调优预设、新 CLI 参数、新检查项）
 #   修订号 缺陷修复、文案与显示修正
-BBR_SCRIPT_VERSION="2.0.1"
+BBR_SCRIPT_VERSION="2.0.2"
 
 # GitHub 仓库配置 (支持环境变量覆盖)
 UPSTREAM_REPO="DongHua3/bbr-v3-pro"
@@ -190,7 +190,8 @@ if [[ "$ARCH" != "aarch64" && "$ARCH" != "x86_64" ]]; then
 fi
 
 # 核心路径常量
-SYSCTL_CONF="/etc/sysctl.d/99-bbr-v3-pro.conf"
+SYSCTL_CONF="/etc/sysctl.d/99-z-bbr-v3-pro.conf"
+OLD_SYSCTL_CONF="/etc/sysctl.d/99-bbr-v3-pro.conf"
 LEGACY_SYSCTL_CONF="/etc/sysctl.conf"
 MODULES_CONF="/etc/modules-load.d/bbr-v3-pro-qdisc.conf"
 SECURITY_MODPROBE_CONF="/etc/modprobe.d/99-bbr-v3-pro-security.conf"
@@ -533,8 +534,28 @@ assert_sysctl_sections_intact() {
 #  确保新配置在全局具备真正的最高生效优先级。
 # ==============================================================================
 neutralize_sysctl_conf_conflicts() {
-    local legacy_file="${LEGACY_SYSCTL_CONF:-/etc/sysctl.conf}"
-    [[ -f "$legacy_file" ]] || return 0
+    # 1. 迁移与清理旧版本 bbr-v3-pro 文件（99-bbr-v3-pro.conf -> 99-z-bbr-v3-pro.conf）
+    if [[ -f "${OLD_SYSCTL_CONF:-}" && "${OLD_SYSCTL_CONF:-}" != "$SYSCTL_CONF" ]]; then
+        $SUDO rm -f "$OLD_SYSCTL_CONF" 2>/dev/null || true
+    fi
+
+    # 2. 收集需要扫描中和的系统旧文件列表：
+    #    - /etc/sysctl.conf (系统向后兼容主文件)
+    #    - /etc/sysctl.d/ 中除本项目当前配置文件以外的所有 .conf
+    local -a target_files=()
+    [[ -f "${LEGACY_SYSCTL_CONF:-/etc/sysctl.conf}" ]] && target_files+=("${LEGACY_SYSCTL_CONF:-/etc/sysctl.conf}")
+
+    if [[ -d /etc/sysctl.d ]]; then
+        local extra_conf
+        for extra_conf in /etc/sysctl.d/*.conf; do
+            [[ -f "$extra_conf" ]] || continue
+            # 排除当前生效的配置文件本体
+            [[ "$extra_conf" == "$SYSCTL_CONF" ]] && continue
+            target_files+=("$extra_conf")
+        done
+    fi
+
+    (( ${#target_files[@]} == 0 )) && return 0
 
     local -a managed_keys=(
         "net.core.default_qdisc"
@@ -553,17 +574,20 @@ neutralize_sysctl_conf_conflicts() {
         "net.ipv4.tcp_notsent_lowat"
     )
 
-    local key found=0
-    for key in "${managed_keys[@]}"; do
-        local escaped_key="${key//\./\\.}"
-        if grep -Eq "^[[:space:]]*${escaped_key}[[:space:]]*=" "$legacy_file" 2>/dev/null; then
-            $SUDO sed -i -E "s|^([[:space:]]*${escaped_key}[[:space:]]*=.*)$|# [bbr-v3-pro override] \1|" "$legacy_file" 2>/dev/null || true
-            found=$((found + 1))
-        fi
+    local target_file key found=0
+    for target_file in "${target_files[@]}"; do
+        [[ -w "$target_file" ]] || continue
+        for key in "${managed_keys[@]}"; do
+            local escaped_key="${key//\./\\.}"
+            if grep -Eq "^[[:space:]]*${escaped_key}[[:space:]]*=" "$target_file" 2>/dev/null; then
+                $SUDO sed -i -E "s|^([[:space:]]*${escaped_key}[[:space:]]*=.*)$|# [bbr-v3-pro override] \1|" "$target_file" 2>/dev/null || true
+                found=$((found + 1))
+            fi
+        done
     done
 
     if (( found > 0 )); then
-        log_info "已自动归档 /etc/sysctl.conf 中 ${found} 项冲突旧参数（如第三方脚本残留），确保 bbr-v3-pro 全局优先生效。"
+        log_info "已自动归档系统中 ${found} 项冲突旧参数（含第三方与主机商模板残留），确保 bbr-v3-pro 全局优先生效。"
     fi
     return 0
 }
@@ -1072,14 +1096,17 @@ EOF
 # ==============================================================================
 clear_network_tuning() {
     log_info "正在清空所有自定义网络优化持久化配置..."
-    $SUDO rm -f "$SYSCTL_CONF" "$MODULES_CONF"
+    $SUDO rm -f "$SYSCTL_CONF" "${OLD_SYSCTL_CONF:-}" "$MODULES_CONF"
 
-    # 还原 /etc/sysctl.conf 中曾被 bbr-v3-pro 自动注释归档的旧条目
-    local legacy_file="${LEGACY_SYSCTL_CONF:-/etc/sysctl.conf}"
-    if [[ -f "$legacy_file" ]] && grep -q '\[bbr-v3-pro override\]' "$legacy_file" 2>/dev/null; then
-        $SUDO sed -i -E 's|^# \[bbr-v3-pro override\] [[:space:]]*||' "$legacy_file" 2>/dev/null || true
-        log_info "已恢复 /etc/sysctl.conf 中被暂存的旧配置参数。"
-    fi
+    # 还原曾被 bbr-v3-pro 自动注释归档的旧条目
+    local f
+    for f in "${LEGACY_SYSCTL_CONF:-/etc/sysctl.conf}" /etc/sysctl.d/*.conf; do
+        [[ -f "$f" && -w "$f" ]] || continue
+        if grep -q '\[bbr-v3-pro override\]' "$f" 2>/dev/null; then
+            $SUDO sed -i -E 's|^# \[bbr-v3-pro override\] [[:space:]]*||' "$f" 2>/dev/null || true
+            log_info "已恢复 $f 中被暂存的旧配置参数。"
+        fi
+    done
 
     $SUDO sysctl --system >/dev/null 2>&1 || true
 
