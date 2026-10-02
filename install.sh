@@ -15,7 +15,90 @@ set -u
 #   主版本 不兼容变更（配置文件路径、CLI 参数语义、菜单编号调整）
 #   次版本 新增功能（新调优预设、新 CLI 参数、新检查项）
 #   修订号 缺陷修复、文案与显示修正
-BBR_SCRIPT_VERSION="1.1.2"
+BBR_SCRIPT_VERSION="1.2.0"
+
+# ==============================================================================
+#  自更新：把快捷命令更新到最新版
+#  返回 0=成功/已最新，1=失败或被拒绝
+#
+#  注意：本函数定义在脚本顶部，因为 --update 参数分支在 root 与发行版检查
+#  之前就要用到它（更新自身不应依赖被更新的环境）。
+#  这里用字面路径与字面 URL，不依赖 QUICK_COMMAND_PATH / GITHUB_REPO 常量
+#  （它们在本段之后才定义）。
+# ==============================================================================
+self_update() {
+    local force="${1:-0}"
+    local target="/usr/local/bin/bbr"
+    local url="https://raw.githubusercontent.com/DongHua3/bbr-v3-pro/main/install.sh"
+    local tmp new tver
+    echo "当前版本: v$BBR_SCRIPT_VERSION"
+    echo "正在获取最新版..."
+
+    if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+        echo "[ERROR] 需要 curl 或 wget 才能更新。" >&2
+        return 1
+    fi
+
+    tmp="$(mktemp)"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL -H 'Cache-Control: no-cache' -o "$tmp" "$url" \
+            || { echo "[ERROR] 下载失败，请检查网络。" >&2; rm -f "$tmp"; return 1; }
+    else
+        wget -q -O "$tmp" "$url" \
+            || { echo "[ERROR] 下载失败，请检查网络。" >&2; rm -f "$tmp"; return 1; }
+    fi
+
+    # 校验下载到的确实是本项目脚本，避免把坏文件写进 PATH
+    if ! grep -q 'QUICK_COMMAND_PATH=' "$tmp" 2>/dev/null; then
+        echo "[ERROR] 下载内容校验失败（不是本项目脚本），已放弃更新。" >&2
+        rm -f "$tmp"; return 1
+    fi
+
+    new="$(grep -m1 '^BBR_SCRIPT_VERSION=' "$tmp" | cut -d'"' -f2)"
+    if [[ -z "$new" ]]; then
+        echo "[ERROR] 无法识别新版本号，已放弃更新。" >&2
+        rm -f "$tmp"; return 1
+    fi
+
+    # 版本比较：raw.githubusercontent.com 的边缘缓存不尊重 Cache-Control，
+    # 刚推送后可能仍返回旧版本。不区分"相同"与"更旧"会让用户误判。
+    if [[ "$new" == "$BBR_SCRIPT_VERSION" ]]; then
+        if (( force )); then
+            echo "远端与本地同为 v$new，已指定强制覆盖，继续写入。"
+        else
+            echo "已是最新版本 v$new，无需更新。"
+            echo "（若确认远端已发布更新版，可能是 raw CDN 缓存未刷新，"
+            echo "  可等待几分钟后重试；或执行：$0 --update --force）"
+            rm -f "$tmp"
+            return 0
+        fi
+    fi
+
+    if (( force == 0 )) && [[ "$new" != "$BBR_SCRIPT_VERSION" ]] \
+        && ! printf '%s\n%s\n' "$BBR_SCRIPT_VERSION" "$new" | sort -V -C; then
+        echo "[WARN] 远端版本 v$new 低于本地 v$BBR_SCRIPT_VERSION，" >&2
+        echo "       通常是 raw CDN 缓存尚未刷新，本次不做覆盖以免降级。" >&2
+        echo "       如确认要强制覆盖：$0 --update --force" >&2
+        rm -f "$tmp"
+        return 1
+    fi
+
+    if [[ $EUID -ne 0 ]]; then
+        if ! command -v sudo >/dev/null 2>&1; then
+            echo "[ERROR] 需要 root 权限写入 $target（且系统无 sudo）。" >&2
+            rm -f "$tmp"; return 1
+        fi
+        sudo cp "$tmp" "$target" && sudo chmod 755 "$target" \
+            || { echo "[ERROR] 写入 $target 失败。" >&2; rm -f "$tmp"; return 1; }
+    else
+        cp "$tmp" "$target" && chmod 755 "$target" \
+            || { echo "[ERROR] 写入 $target 失败。" >&2; rm -f "$tmp"; return 1; }
+    fi
+    rm -f "$tmp"
+
+    echo "[OK] 已更新: v$BBR_SCRIPT_VERSION -> v$new  ($target)"
+    return 0
+}
 
 # 色彩定义
 RED='\033[0;31m'
@@ -50,84 +133,12 @@ if [[ $# -gt 0 ]]; then
             exit 0
             ;;
         --update|--self-update)
-            # 自更新：把最新脚本覆盖到快捷命令位置。
-            # 这里用字面路径与字面 URL —— QUICK_COMMAND_PATH / GITHUB_REPO
-            # 两个常量在本段之后才定义，此处的目的是让"更新"自身不依赖它们。
-            _upd_target="/usr/local/bin/bbr"
-            _upd_url="https://raw.githubusercontent.com/DongHua3/bbr-v3-pro/main/install.sh"
-            echo "当前版本: v$BBR_SCRIPT_VERSION"
-            echo "正在获取最新版..."
-
-            if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
-                echo "[ERROR] 需要 curl 或 wget 才能更新。" >&2
-                exit 1
-            fi
-
-            _upd_tmp="$(mktemp)"
-            if command -v curl >/dev/null 2>&1; then
-                curl -fsSL -H 'Cache-Control: no-cache' -o "$_upd_tmp" "$_upd_url" \
-                    || { echo "[ERROR] 下载失败，请检查网络。" >&2; rm -f "$_upd_tmp"; exit 1; }
+            if [[ "${2:-}" == "--force" || "${2:-}" == "-f" ]]; then
+                self_update 1
             else
-                wget -q -O "$_upd_tmp" "$_upd_url" \
-                    || { echo "[ERROR] 下载失败，请检查网络。" >&2; rm -f "$_upd_tmp"; exit 1; }
+                self_update 0
             fi
-
-            # 校验下载到的确实是本项目脚本，避免把坏文件写进 PATH
-            if ! grep -q 'QUICK_COMMAND_PATH=' "$_upd_tmp" 2>/dev/null; then
-                echo "[ERROR] 下载内容校验失败（不是本项目脚本），已放弃更新。" >&2
-                rm -f "$_upd_tmp"; exit 1
-            fi
-
-            _upd_new="$(grep -m1 '^BBR_SCRIPT_VERSION=' "$_upd_tmp" | cut -d'"' -f2)"
-            if [[ -z "$_upd_new" ]]; then
-                echo "[ERROR] 无法识别新版本号，已放弃更新。" >&2
-                rm -f "$_upd_tmp"; exit 1
-            fi
-
-            # 版本比较：raw.githubusercontent.com 的边缘缓存不尊重
-            # Cache-Control: no-cache，刚推送后可能仍返回旧版本。若不区分
-            # "相同" 与 "更旧"，用户会看到"已是最新"而完全不知道 CDN 在返回旧文件。
-            _upd_force=0
-            [[ "${2:-}" == "--force" || "${2:-}" == "-f" ]] && _upd_force=1
-
-            if [[ "$_upd_new" == "$BBR_SCRIPT_VERSION" ]]; then
-                if (( _upd_force )); then
-                    echo "远端与本地同为 v$_upd_new，--force 已指定，将执行覆盖写入。"
-                else
-                    echo "已是最新版本 v$_upd_new，无需更新。"
-                    echo "（若确认远端已发布更新版，可能是 raw CDN 缓存未刷新，"
-                    echo "  可等待几分钟后重试，或执行：$0 --update --force）"
-                    rm -f "$_upd_tmp"
-                    exit 0
-                fi
-            fi
-
-            if (( _upd_force == 0 )) \
-                && [[ "$_upd_new" != "$BBR_SCRIPT_VERSION" ]] \
-                && ! printf '%s\n%s\n' "$BBR_SCRIPT_VERSION" "$_upd_new" | sort -V -C; then
-                # sort -V -C 失败说明本地版本更高 —— 远端拿到的是更旧的副本
-                echo "[WARN] 远端版本 v$_upd_new 低于本地 v$BBR_SCRIPT_VERSION，"
-                echo "       通常是 raw CDN 缓存尚未刷新，本次不做覆盖以免降级。"
-                echo "       如确认要强制覆盖：$0 --update --force"
-                rm -f "$_upd_tmp"
-                exit 1
-            fi
-
-            if [[ $EUID -ne 0 ]]; then
-                if ! command -v sudo >/dev/null 2>&1; then
-                    echo "[ERROR] 需要 root 权限写入 $_upd_target（且系统无 sudo）。" >&2
-                    rm -f "$_upd_tmp"; exit 1
-                fi
-                sudo cp "$_upd_tmp" "$_upd_target" && sudo chmod 755 "$_upd_target" \
-                    || { echo "[ERROR] 写入 $_upd_target 失败。" >&2; rm -f "$_upd_tmp"; exit 1; }
-            else
-                cp "$_upd_tmp" "$_upd_target" && chmod 755 "$_upd_target" \
-                    || { echo "[ERROR] 写入 $_upd_target 失败。" >&2; rm -f "$_upd_tmp"; exit 1; }
-            fi
-            rm -f "$_upd_tmp"
-
-            echo "[OK] 已更新: v$BBR_SCRIPT_VERSION -> v$_upd_new  ($_upd_target)"
-            exit 0
+            exit $?
             ;;
         --help|-h)
             echo "bbr-v3-pro v$BBR_SCRIPT_VERSION"
@@ -1489,11 +1500,12 @@ show_menu() {
         echo -e "  ${BOLD}9.${PLAIN} 还原系统出厂网络设置 (清空所有 sysctl 调优配置)"
         echo -e "  ${BOLD}10.${PLAIN} 卸载自建 BBRv3 内核 (安全回滚至官方原厂内核)"
         echo -e "  ${BOLD}11.${PLAIN} 彻底卸载 bbr-v3-pro (清理快捷命令及所有残留)"
+        echo -e "  ${BOLD}12.${PLAIN} 更新 bbr-v3-pro 到最新版"
         echo -e "  ${BOLD}0.${PLAIN} 退出管理系统"
         echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${PLAIN}"
         echo -e "快捷唤醒指令: ${GREEN}bbr${PLAIN}"
         echo -e "----------------------------------------------------------------"
-        read -r -p "请输入功能编号 [0-11]: " opt
+        read -r -p "请输入功能编号 [0-12]: " opt
         opt="${opt//[[:space:]]/}"
 
         case "$opt" in
@@ -1508,8 +1520,9 @@ show_menu() {
             9) clear_network_tuning ;;
             10) uninstall_bbrv3_kernel ;;
             11) uninstall_everything ;;
+            12) self_update 0 ;;
             0) exit 0 ;;
-            *) log_error "输入无效，请输入 [0-11]！" ;;
+            *) log_error "输入无效，请输入 [0-12]！" ;;
         esac
 
         echo ""

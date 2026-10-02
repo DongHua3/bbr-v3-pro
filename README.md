@@ -61,14 +61,38 @@ curl -fsSL -o /tmp/bbr.sh https://raw.githubusercontent.com/DongHua3/bbr-v3-pro/
 sudo bash /tmp/bbr.sh --status
 ```
 
+### 交互菜单一览
+
+输入 `bbr` 打开菜单，共 13 项（输入编号操作）：
+
+| 编号 | 功能 |
+|---|---|
+| 1 | 查看系统网络栈与内核状态（含 BBRv3 检测）|
+| 2 | 安装 / 更新 BBRv3 内核（可选标准版或 Max 版）|
+| 3 | 启用 BBR + FQ |
+| 4 | 启用 BBR + CAKE（抗晚高峰拥堵）|
+| 5 | 应用 AI 网关与跨洋全栈优化 |
+| 6 | BBR v3 智能带宽动态调优 |
+| 7 | 应用亚太短链路低延迟调优 |
+| 8 | 检查系统 TCP / UDP 端口占用 |
+| 9 | 还原系统出厂网络设置 |
+| 10 | 卸载自建 BBRv3 内核 |
+| 11 | 彻底卸载 bbr-v3-pro |
+| 12 | **更新 bbr-v3-pro 到最新版** |
+| 0 | 退出管理系统 |
+
+> 菜单顶部会显示当前脚本版本与系统状态，便于确认是否已是最新。
+
 ### 更新与版本
 
 脚本自带版本号，用 `bbr --version` 或 `bbr --status` 查看。
 
 ```bash
-bbr --version        # bbr-v3-pro v1.1.1
+bbr --version        # bbr-v3-pro v1.2.0
 bbr --update          # 一条命令把快捷命令更新到最新版
 ```
+
+也可以直接打开菜单选 **12**，效果相同。
 
 `--update` 会：下载最新脚本 → 校验内容确为本项目脚本 → 比较版本 → 覆盖 `/usr/local/bin/bbr` 并恢复权限。
 
