@@ -1159,44 +1159,83 @@ install_bbrv3_kernel() {
         return 1
     fi
 
-    log_info "正在安全安装新内核 (保留旧内核作为救援保底)..."
-    local boot_before boot_after
-    boot_before=$(ls -1 /boot/vmlinuz-* 2>/dev/null | sort || true)
-    if $SUDO dpkg -i "$workdir"/linux-*.deb || $SUDO apt-get install -f -y; then
-        boot_after=$(ls -1 /boot/vmlinuz-* 2>/dev/null | sort || true)
-        if [[ -n "$boot_before" && "$boot_before" == "$boot_after" ]]; then
-            log_error "dpkg 未实际替换内核：/boot 下内核映像与安装前完全一致。"
-            log_warn "常见原因：该 .deb 的版本号与已安装版本相同，dpkg 判定为同版本重复安装而跳过。"
-            log_info "请确认 Release 包版本号是否唯一（构建侧应设置 KDEB_PKGVERSION），或先卸载旧包再安装。"
+    # 下载前置检查：若 deb 版本与已装内核完全相同，先征求确认，
+    # 避免白跑一遍 150MB 的解包 + initramfs + GRUB 生成。
+    local deb_ver cur_ver need_prompt=0
+    for deb in "$workdir"/linux-image-*.deb; do
+        [[ -f "$deb" ]] || continue
+        deb_ver="$(dpkg-deb -f "$deb" Version 2>/dev/null || true)"
+        cur_ver="$(dpkg-query -W -f='${Version}' "$(dpkg-deb -f "$deb" Package 2>/dev/null)" 2>/dev/null || true)"
+        if [[ -n "$deb_ver" && "$deb_ver" == "$cur_ver" ]]; then
+            log_info "当前内核版本 (${cur_ver}) 与要安装的版本相同，无需升级。"
+            need_prompt=1
+        fi
+    done
+    if (( need_prompt )); then
+        read -r -p "是否仍要重新安装同版本内核？(y/N): " reinstall_same
+        if [[ "$reinstall_same" != "y" && "$reinstall_same" != "Y" ]]; then
+            log_info "已取消，未做任何改动。"
             rm -rf "$workdir"
-            return 1
+            return 0
         fi
-        log_info "正在更新 GRUB 引导记录..."
-        if command -v update-grub &>/dev/null; then
-            $SUDO update-grub
-        fi
-        if command -v update-grub &>/dev/null; then
-            local newest_kernel
-            newest_kernel=$(ls -1 /boot/vmlinuz-* 2>/dev/null | sort -V | tail -n 1 | sed 's|.*/vmlinuz-||')
-            if [[ -n "$newest_kernel" ]] && ! grep -q "$newest_kernel" /boot/grub/grub.cfg 2>/dev/null; then
-                log_warn "GRUB 配置中未找到内核 $newest_kernel 的引导项，重启后可能仍进入旧内核。"
-                log_warn "请人工检查 /boot/grub/grub.cfg 与 update-grub 输出后再重启。"
-            fi
-        fi
-        log_success "新内核安装并更新引导成功！"
-        rm -rf "$workdir"
+        log_warn "将重新安装同版本内核（不会升级到更新的版本）。"
+    fi
 
-        read -r -p "新内核需要重启系统才能生效，是否立即重启？(y/n): " do_reboot
-        if [[ "$do_reboot" == "y" || "$do_reboot" == "Y" ]]; then
-            log_info "系统正在重启..."
-            $SUDO reboot
-        else
-            log_warn "请记得稍后手动执行 reboot 重启系统。"
-        fi
+    log_info "正在安全安装新内核 (保留旧内核作为救援保底)..."
+    # 判据说明（教训）：
+    # 只比对 /boot/vmlinuz-* 的【文件名列表】是错的 —— 同版本重装时文件名不变，
+    # 会被误判为"dpkg 未替换内核"，而实际上 dpkg 可能确实完成了重装。
+    # 因此：
+    #   - 主判据 = dpkg 自己的退出码（失败才说明真的没装上）
+    #   - 辅助判据 = 内核映像的 mtime 签名，用于区分"真的重装了"与"确实什么都没做"
+    local before_sig after_sig
+    kernel_sig() {
+        ls -l --time-style=+%s /boot/vmlinuz-* 2>/dev/null \
+            | awk '{print $6, $7}' | sort || true
+    }
+    before_sig="$(kernel_sig)"
+
+    if $SUDO dpkg -i "$workdir"/linux-*.deb; then
+        after_sig="$(kernel_sig)"
+        log_success "内核包安装完成。"
+    elif $SUDO apt-get install -f -y; then
+        after_sig="$(kernel_sig)"
+        log_warn "dpkg -i 返回非零，但 apt-get install -f 修复依赖成功，已继续。"
     else
         log_error "内核安装失败！系统原有内核完整保留未受破坏，请勿重启并检查报错日志。"
         rm -rf "$workdir"
         return 1
+    fi
+
+    if [[ -n "$before_sig" && "$before_sig" == "$after_sig" ]]; then
+        # dpkg 成功但内核映像没变化：说明装的是与已装版本完全相同的包，
+        # /boot 内容被原样重写。这不是失败，但用户需要知道"没有换到新内核"。
+        log_warn "内核映像未发生变化：本次安装的版本与已装版本相同（同版本重装）。"
+        log_warn "若期望升级到更新的内核，请确认 Release 中的 deb 版本号已递增"
+        log_warn "（构建侧需设置 KDEB_PKGVERSION），或等待下一个内核版本的 Release。"
+    fi
+
+    log_info "正在更新 GRUB 引导记录..."
+    if command -v update-grub &>/dev/null; then
+        $SUDO update-grub
+    fi
+    if command -v update-grub &>/dev/null; then
+        local newest_kernel
+        newest_kernel=$(ls -1 /boot/vmlinuz-* 2>/dev/null | sort -V | tail -n 1 | sed 's|.*/vmlinuz-||')
+        if [[ -n "$newest_kernel" ]] && ! grep -q "$newest_kernel" /boot/grub/grub.cfg 2>/dev/null; then
+            log_warn "GRUB 配置中未找到内核 $newest_kernel 的引导项，重启后可能仍进入旧内核。"
+            log_warn "请人工检查 /boot/grub/grub.cfg 与 update-grub 输出后再重启。"
+        fi
+    fi
+    log_success "内核安装与引导更新流程完成。"
+    rm -rf "$workdir"
+
+    read -r -p "新内核需要重启系统才能生效，是否立即重启？(y/n): " do_reboot
+    if [[ "$do_reboot" == "y" || "$do_reboot" == "Y" ]]; then
+        log_info "系统正在重启..."
+        $SUDO reboot
+    else
+        log_warn "请记得稍后手动执行 reboot 重启系统。"
     fi
 }
 
