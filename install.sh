@@ -15,7 +15,7 @@ set -u
 #   主版本 不兼容变更（配置文件路径、CLI 参数语义、菜单编号调整）
 #   次版本 新增功能（新调优预设、新 CLI 参数、新检查项）
 #   修订号 缺陷修复、文案与显示修正
-BBR_SCRIPT_VERSION="1.2.1"
+BBR_SCRIPT_VERSION="1.3.0"
 
 # ==============================================================================
 #  自更新：把快捷命令更新到最新版
@@ -226,9 +226,43 @@ check_and_install_deps() {
 
         export DEBIAN_FRONTEND=noninteractive
         if ! apt-get update; then
-            log_warn "apt-get update 过程中出现错误，正在尝试修复已知异常源..."
-            rm -f /etc/apt/sources.list.d/caddy*.list /etc/apt/sources.list.d/caddy*.sources 2>/dev/null || true
+            # 某些第三方源（如 Caddy 官方源）在部分网络环境下会拖垮整个
+            # apt-get update。这里临时【移开】这些源重试，随后立即恢复 ——
+            # 绝不静默删除用户的软件源，那会让用户后续收不到该软件的安全更新。
+            log_warn "apt-get update 出现错误，尝试临时移开第三方源后重试..."
+            local caddy_backup="/tmp/bbr-apt-sources-backup.$$"
+            mkdir -p "$caddy_backup"
+            local moved=0 f
+            for f in /etc/apt/sources.list.d/caddy*.list /etc/apt/sources.list.d/caddy*.sources; do
+                [[ -f "$f" ]] || continue
+                if mv "$f" "$caddy_backup/" 2>/dev/null; then
+                    moved=$((moved + 1))
+                fi
+            done
+
+            if (( moved > 0 )); then
+                log_info "已临时移开 $moved 个第三方源文件，重试 apt-get update..."
+            fi
             apt-get update || true
+
+            # 无论如何都恢复：这些是用户的合法软件源
+            if (( moved > 0 )); then
+                local restore_failed=0
+                for f in "$caddy_backup"/*; do
+                    [[ -e "$f" ]] || continue
+                    if ! mv -f "$f" /etc/apt/sources.list.d/ 2>/dev/null; then
+                        restore_failed=$((restore_failed + 1))
+                        log_error "未能恢复源文件: $(basename "$f")"
+                    fi
+                done
+                if (( restore_failed > 0 )); then
+                    log_warn "有 $restore_failed 个源文件未能自动恢复，备份保留在: $caddy_backup"
+                    log_warn "请手工移动到 /etc/apt/sources.list.d/ 后执行 apt-get update。"
+                else
+                    rmdir "$caddy_backup" 2>/dev/null || true
+                    log_info "已恢复被临时移开的第三方源文件。"
+                fi
+            fi
         fi
 
         if ! apt-get install -y "${unique_pkgs[@]}"; then
@@ -387,10 +421,19 @@ security_mitigation_status() {
 get_safe_memory_limits() {
     local mem_kb
     mem_kb=$(awk '/MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 1048576)
-    local page_size=4096
     MEM_TOTAL_MB=$(( mem_kb / 1024 ))
 
-    # 1. 计算全局 TCP 内存池水位 (net.ipv4.tcp_mem，以 4KB 页面为单位)
+    # 内核页面大小：net.ipv4.tcp_mem 的单位是【内核页面数】而非字节。
+    # 硬编码 4096 在 64KB 页面的 ARM64 内核上会把允许页数放大约 16 倍，
+    # 使内存钳位完全失效。改用 getconf 探测，探测失败才回退 4KB。
+    local page_size
+    page_size=$(getconf PAGESIZE 2>/dev/null || true)
+    if ! [[ "$page_size" =~ ^[0-9]+$ ]] || (( page_size <= 0 )); then
+        page_size=4096
+        log_warn "无法探测内核页面大小，按 4KB 计算 tcp_mem 水位。"
+    fi
+
+    # 1. 计算全局 TCP 内存池水位 (net.ipv4.tcp_mem，单位为内核页面数)
     # min: 物理内存 10% | pressure: 物理内存 25% | max: 物理内存 40%
     TCP_MEM_MIN=$(( (mem_kb * 1024 * 10 / 100) / page_size ))
     TCP_MEM_PRESSURE=$(( (mem_kb * 1024 * 25 / 100) / page_size ))
@@ -620,6 +663,35 @@ get_default_route_ifaces() {
     } | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") print $(i + 1)}' | sort -u
 }
 
+# 把队列调度模块声明为开机加载。
+#
+# 背景：fq 是内核内置（CONFIG_NET_SCH_FQ=y），开机即可用；
+# 而 cake / fq_codel / fq_pie 在本项目内核中是模块（=m）。
+# 若只在运行时 modprobe、不写 modules-load.d，重启后 systemd-sysctl
+# 应用 net.core.default_qdisc=cake 时模块可能尚未加载，该行会被忽略，
+# 队列静默回退 —— 表现为"设置成功但重启后失效"。
+persist_qdisc_module() {
+    local qdisc="$1"
+    local module_name="sch_$qdisc"
+
+    # fq 为内核内置，无需声明；同时清理可能残留的旧声明
+    if [[ "$qdisc" == "fq" ]]; then
+        $SUDO rm -f "$MODULES_CONF"
+        return 0
+    fi
+
+    # 确认模块确实存在再写，避免写入一个加载不了的条目
+    if modinfo "$module_name" >/dev/null 2>&1 || lsmod 2>/dev/null | grep -q "^${module_name//-/_}"; then
+        echo "$module_name" | $SUDO tee "$MODULES_CONF" >/dev/null
+        log_info "已声明开机加载模块: $module_name ($MODULES_CONF)"
+    else
+        # 可能是内置或该内核不支持，清理旧声明并如实说明
+        $SUDO rm -f "$MODULES_CONF"
+        log_warn "$module_name 不可作为模块加载（可能内置或内核不支持），未写入开机加载声明。"
+    fi
+    return 0
+}
+
 # 把出口网卡的 root qdisc 替换为指定算法。
 # 失败时从 sysctl 读取实际生效值并写回，避免把网卡队列留在中间状态。
 # 返回 1 仅在"所有网卡都替换失败且回写也未成功"时发生。
@@ -695,6 +767,13 @@ apply_bbr_and_qdisc() {
 net.core.default_qdisc = $qdisc
 net.ipv4.tcp_congestion_control = $algo
 EOF
+
+    # 模块化编译的队列算法必须在开机早期加载：
+    # fq 是内核内置（CONFIG_NET_SCH_FQ=y），无需处理；
+    # cake / fq_codel / fq_pie 均为模块（=m），若不在 modules-load.d 中
+    # 声明，重启后 systemd-sysctl 应用 default_qdisc 时模块可能尚未加载，
+    # 该行会被忽略，队列静默回退到默认值 —— 表现为"设置成功但重启后失效"。
+    persist_qdisc_module "$qdisc"
 
     $SUDO sysctl --system >/dev/null 2>&1
     sysctl_report || log_warn "部分参数未生效，持久化配置已写入 $SYSCTL_CONF。"
@@ -1170,6 +1249,16 @@ fetch_kernel_assets() {
 
     for url in $asset_urls; do
         base="${url##*/}"
+
+        # 明确排除 linux-libc-dev：它是用户态开发头文件，不属于内核本体。
+        # 主线内核版本（如 7.2.8）的 libc-dev 会与发行版自带的 libc6-dev
+        # 产生版本冲突，导致后续 apt-get upgrade 报依赖损坏并锁死。
+        # 内核镜像/头文件的编译并不需要安装这个包。
+        if [[ "$base" == linux-libc-dev* ]]; then
+            log_info "跳过 $base（用户态开发头文件，会与发行版 libc6-dev 冲突，内核安装不需要）"
+            continue
+        fi
+
         log_info "正在下载: $base"
         if ! wget -q --show-progress "$url" -P "$workdir"; then
             log_error "下载失败: $url"
