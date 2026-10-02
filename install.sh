@@ -48,7 +48,8 @@ SECURITY_MODPROBE_CONF="/etc/modprobe.d/99-bbr-v3-pro-security.conf"
 QUICK_COMMAND_PATH="/usr/local/bin/bbr"
 
 # GitHub 仓库配置 (支持环境变量覆盖)
-GITHUB_REPO="${BBR_REPO:-DongHua3/bbr-v3-pro}"
+UPSTREAM_REPO="DongHua3/bbr-v3-pro"
+GITHUB_REPO="${BBR_REPO:-$UPSTREAM_REPO}"
 GITHUB_API_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 
 # 依赖修复与检查
@@ -583,36 +584,60 @@ gh_api_get() {
 install_bbrv3_kernel() {
     local profile="${1:-standard}"
     assert_supported_kernel_install_system || return 1
-    log_info "正在从 GitHub 获取 [$GITHUB_REPO] 最新发布的内核版本..."
 
-    local base_url="https://api.github.com/repos/${GITHUB_REPO}/releases"
+    local target_repo="${GITHUB_REPO}"
+    log_info "正在从 GitHub 获取 [$target_repo] 最新发布的内核版本..."
+
+    local base_url="https://api.github.com/repos/${target_repo}/releases"
     local release_data
-    release_data=$(gh_api_get "$base_url")
-
-    if [[ -z "$release_data" ]]; then
-        log_error "从 GitHub 获取版本清单失败，请检查网络连接。"
-        return 1
-    fi
+    release_data=$(gh_api_get "$base_url" 2>/dev/null || true)
 
     local arch_filter="x86_64"
     [[ "$ARCH" == "aarch64" ]] && arch_filter="arm64"
 
-    local latest_tag
-    latest_tag=$(echo "$release_data" | jq -r --arg filter "$arch_filter" --arg prof "$profile" '
-      map(
-        select(.tag_name | test("^" + $filter + "-[0-9]"; "i"))
-        | select(if $prof == "max" then (.tag_name | endswith("-max")) else ((.tag_name | endswith("-max")) | not) end)
-      )
-      | sort_by(.published_at)
-      | .[-1].tag_name // ""
-    ')
+    local latest_tag=""
+    if [[ -n "$release_data" ]]; then
+        latest_tag=$(echo "$release_data" | jq -r --arg filter "$arch_filter" --arg prof "$profile" '
+          if type=="array" then
+            map(
+              select(.tag_name | test("^" + $filter + "-[0-9]"; "i"))
+              | select(if $prof == "max" then (.tag_name | endswith("-max")) else ((.tag_name | endswith("-max")) | not) end)
+            )
+            | sort_by(.published_at)
+            | .[-1].tag_name // ""
+          else "" end
+        ' 2>/dev/null || true)
+    fi
+
+    # 智能兜底回落逻辑: 如果私有仓库未发布对应内核包，自动回落至官方中央源
+    if [[ -z "$latest_tag" || "$latest_tag" == "null" ]]; then
+        if [[ "$target_repo" != "$UPSTREAM_REPO" ]]; then
+            log_warn "未在私有仓库 [$target_repo] 找到可用内核包，正在自动兜底切换至官方中央源 [$UPSTREAM_REPO]..."
+            target_repo="$UPSTREAM_REPO"
+            base_url="https://api.github.com/repos/${target_repo}/releases"
+            release_data=$(gh_api_get "$base_url" 2>/dev/null || true)
+            if [[ -n "$release_data" ]]; then
+                latest_tag=$(echo "$release_data" | jq -r --arg filter "$arch_filter" --arg prof "$profile" '
+                  if type=="array" then
+                    map(
+                      select(.tag_name | test("^" + $filter + "-[0-9]"; "i"))
+                      | select(if $prof == "max" then (.tag_name | endswith("-max")) else ((.tag_name | endswith("-max")) | not) end)
+                    )
+                    | sort_by(.published_at)
+                    | .[-1].tag_name // ""
+                  else "" end
+                ' 2>/dev/null || true)
+            fi
+        fi
+    fi
 
     if [[ -z "$latest_tag" || "$latest_tag" == "null" ]]; then
-        log_error "未在仓库 $GITHUB_REPO 中找到适用于架构 [$ARCH] 的 BBRv3 内核安装包。"
+        log_error "未在仓库 [$target_repo] 中找到适用于架构 [$ARCH] 的 BBRv3 内核安装包。"
+        log_info "排错提示: 若刚新建仓库，请确认 GitHub Actions 是否已编译完成并发布 Release；亦可检查网络或设置 GITHUB_TOKEN 避免 API 限流。"
         return 1
     fi
 
-    log_info "匹配到最新内核版本标签: ${GREEN}$latest_tag${PLAIN}"
+    log_info "匹配到最新内核版本标签: ${GREEN}$latest_tag${PLAIN} (来源: $target_repo)"
 
     local asset_urls
     asset_urls=$(echo "$release_data" | jq -r --arg tag "$latest_tag" '

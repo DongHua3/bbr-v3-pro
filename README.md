@@ -89,7 +89,7 @@ bbr-v3-pro/
 2. 在仓库的 `Settings -> Actions -> General` 中，确保 Workflow 拥有 `Read and write permissions`；
 3. 进入 `Actions` 页面，手动触发 `构建带有BBRv3的内核`，GitHub 云端服务器将自动拉取最新主线 Linux 内核并打上 BBRv3 补丁完成打包；
 4. 编译完成后，安装包将自动推送到您自己仓库的 Releases 中；
-5. 编译完成后，安装包将自动推送到您自己仓库的 Releases 中，`install.sh` 脚本已预设直接对接 `DongHua3/bbr-v3-pro`，即可实现 100% 个人私有闭环安装！
+5. 脚本已原生支持**智能双模兜底**：若指定了私有仓库（例如 `BBR_REPO="用户名/bbr-v3-pro"`）但尚未发布版本，会自动回落至官方中央源 `DongHua3/bbr-v3-pro`，保证永远开箱即用！
 
 ---
 
