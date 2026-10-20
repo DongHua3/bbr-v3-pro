@@ -454,7 +454,7 @@ bash ../../scripts/prepare-kernel-config.sh x86_64   # ARM64 机器传 arm64
 make bindeb-pkg -j$(nproc) LOCALVERSION=-bbrv3 KDEB_COMPRESS=gzip skipdbg=true
 ```
 
-> **大版本刚发布时取不到源码？** `linux-X.Y.y` 稳定分支要等该系列的第一个稳定更新（X.Y.1）进入队列才会建立。例如 7.3 发布后数日内，`gregkh/linux` 里还只有到 `linux-7.2.y`。此时改用 torvalds 仓库的同版本发布标签即可：
+> **大版本刚发布时取不到源码？** 上游 `git.kernel.org` 的 `linux-X.Y.y` 分支通常在发版当晚就建好了（指向该版本的发布提交），但 GitHub 镜像 `gregkh/linux` 要等该分支上有新提交被推送后才会出现——也就是第一个稳定补丁队列（X.Y.1）开始推进的时候，按历史规律约在发版后 5~11 天。例如 7.3 于 2026-10-18 发布，kernel.org 上已有 `linux-7.3.y`，而 GitHub 镜像仍只到 `linux-7.2.y`。此时改用 torvalds 仓库的同版本发布标签即可：
 >
 > ```bash
 > git clone --depth=1 --branch v7.3 https://github.com/torvalds/linux.git kernel/linux
