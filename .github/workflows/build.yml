@@ -172,9 +172,22 @@ jobs:
         if: env.BUILD_NEEDED == 'true'
         working-directory: ./kernel
         run: |
+          set -euo pipefail
           branch=$(echo "${{ env.KERNEL_VERSION }}" | grep -oP '^\d+\.\d+')
-          git clone --depth=1 --branch linux-$branch.y \
-            https://github.com/gregkh/linux.git linux
+          # gregkh/linux 只承载已进入稳定维护的系列。内核主线刚发版时（如 7.3 发布、
+          # 7.3.1 尚未排队），linux-X.Y.y 分支要等首个 stable 队列才被创建，
+          # 此时稳定树取不到代码。此处回退到 torvalds/linux 的同版本发布标签，
+          # 保证发版当天就能产出该版本的包，而不是让定时任务一直红。
+          if git ls-remote --exit-code --heads https://github.com/gregkh/linux.git \
+               "refs/heads/linux-$branch.y" >/dev/null 2>&1; then
+            echo "Using stable branch linux-$branch.y from gregkh/linux."
+            git clone --depth=1 --branch "linux-$branch.y" \
+              https://github.com/gregkh/linux.git linux
+          else
+            echo "linux-$branch.y is not published in gregkh/linux yet; falling back to torvalds/linux tag v$branch." >&2
+            git clone --depth=1 --branch "v$branch" \
+              https://github.com/torvalds/linux.git linux
+          fi
 
       - name: 应用 BBRv3 补丁
         if: env.BUILD_NEEDED == 'true'
