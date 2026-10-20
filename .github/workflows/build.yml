@@ -28,7 +28,10 @@ permissions:
 
 concurrency:
   group: bbrv3-kernel-build
-  cancel-in-progress: true
+  # 手动触发意味着「我要立刻重来」，掐掉正在跑的旧任务；定时触发则排队，
+  # 不互相打断。单次构建实测约 80~100 分钟，被中途取消会白烧一个多小时，
+  # 还可能让 Release 只剩单架构的包。
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 jobs:
   preflight:
@@ -118,6 +121,9 @@ jobs:
     # 去掉该依赖后两者并行执行，cleanup 出错也不阻塞编译与发布。
     needs: [preflight]
     if: ${{ always() && needs.preflight.outputs.build_needed == 'true' }}
+    # 实测编译 81~101 分钟，此处留约一倍余量：既避免正常构建被误杀，
+    # 也避免卡死的任务占着并发组把后续排队任务堵到默认 6 小时上限。
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
