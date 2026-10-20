@@ -104,14 +104,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 删除旧的工作流运行记录
-        uses: Mattraks/delete-workflow-runs@main
+        # 锁到 v2.1.0 的完整提交 SHA：标签理论上可被移动，SHA 不可变，
+        # 避免上游任何一次推送直接进入这条生产流水线。
+        uses: Mattraks/delete-workflow-runs@b3018382ca039b53d238908238bd35d1fb14f8ee
         with:
-          retain_days: 0
-          keep_minimum_runs: 0
+          # 两个闸门同时满足才删：保留最近 20 次运行，且 30 天内的记录一律不动。
+          # 历史上这里是 0/0（全删），故障排查时无历史可比对，构建耗时趋势也一并丢失。
+          retain_days: 30
+          keep_minimum_runs: 20
 
   build:
-    needs: [preflight, cleanup]
-    if: ${{ always() && needs.preflight.outputs.build_needed == 'true' && needs.cleanup.result == 'success' }}
+    # 不依赖 cleanup：清理历史属保洁动作，它失败不应让整天不出包。
+    # 去掉该依赖后两者并行执行，cleanup 出错也不阻塞编译与发布。
+    needs: [preflight]
+    if: ${{ always() && needs.preflight.outputs.build_needed == 'true' }}
     strategy:
       fail-fast: false
       matrix:
