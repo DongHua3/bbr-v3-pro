@@ -511,7 +511,7 @@ bbr-v3-pro/
 ├── .github/workflows/
 │   ├── build.yml                 # 云端构建与基线回写工作流
 │   └── lint.yml                  # 静态语法与格式检查
-├── patches/                      # BBRv3 主线内核移植补丁 (7.0 / 7.1 / 7.2)
+├── patches/                      # BBRv3 主线内核移植补丁 (7.0 / 7.1 / 7.2 / 7.3)
 ├── scripts/
 │   ├── apply-bbrv3-port.sh       # 补丁安全版本排序 (sort -V) 与模糊匹配
 │   └── prepare-kernel-config.sh  # 内核配置策略注入与自寻址准备
