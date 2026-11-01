@@ -5,11 +5,16 @@ on:
     paths:
       - 'install.sh'
       - 'scripts/**'
-      - '.github/workflows/lint.yml'
+      - 'tests/**'
+      - '.github/workflows/**'
+      - '*.config'
   pull_request:
     paths:
       - 'install.sh'
       - 'scripts/**'
+      - 'tests/**'
+      - '.github/workflows/**'
+      - '*.config'
   workflow_dispatch:
 
 jobs:
@@ -42,3 +47,24 @@ jobs:
         continue-on-error: true
         run: |
           shellcheck -S warning install.sh scripts/*.sh || true
+
+  unit:
+    # 测试套件此前没有任何 CI 门禁：断言与 workflow 实现漂移后只会一直红着，
+    # 没人跑过一次。这里把它接进流水线，改 workflow 或 config 都算数。
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装测试依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pyyaml
+
+      - name: 运行测试套件
+        run: python -m pytest tests/ -q

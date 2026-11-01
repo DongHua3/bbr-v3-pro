@@ -101,6 +101,56 @@ jobs:
             fi
           fi
 
+      - name: 检出 patches 目录
+        if: steps.plan.outputs.build_needed == 'true'
+        uses: actions/checkout@v4
+        with:
+          # 预检只需要补丁文件本身，不下载内核树。上下文漂移由构建阶段的
+          # apply-bbrv3-port.sh 用 git apply --check / patch --fuzz 判定，
+          # 这里不重复那件事，只回答「新系列发布了，补丁文件有没有跟上」。
+          sparse-checkout: patches
+          sparse-checkout-cone-mode: true
+
+      - name: 预检 BBRv3 补丁覆盖
+        if: steps.plan.outputs.build_needed == 'true'
+        env:
+          KERNEL_VERSION: ${{ steps.plan.outputs.kernel_version }}
+        run: |
+          set -euo pipefail
+          series="${KERNEL_VERSION%.*}"
+          want="patches/bbrv3-linux-${series}.patch"
+          fallback="$(ls patches/bbrv3-linux-*.patch 2>/dev/null | sort -V | tail -n 1 || true)"
+
+          {
+            echo "### BBRv3 补丁覆盖预检"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| 目标内核 | \`${KERNEL_VERSION}\` (linux-${series}.y) |"
+            echo "| 期望补丁 | \`${want}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -f "$want" ]; then
+            echo "| 状态 | 精确匹配，将走 git apply 精确应用路径 |" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [ -n "$fallback" ]; then
+            # 上游开新系列（如 7.3 -> 7.4）时补丁必然缺席。此处不阻断构建：
+            # apply-bbrv3-port.sh 会回退到旧补丁并尝试 fuzz，产物可用性由
+            # 后面的补丁质量断言和 Release 说明里的 fuzz 标记兜底。
+            # 但不提示的话，这条路径会安静地跑完，没人知道补丁已经落后一个系列。
+            echo "| 状态 | **缺少 ${series} 系列补丁**，将回退到 \`$(basename "$fallback")\` 并尝试 fuzz 应用 |" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "需要动作：在 linux-${series}.y 上重新生成 \`${want}\`，否则本次产物可能是错位移植。" >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning title=BBRv3 补丁缺少 ${series} 系列::回退到 $(basename "$fallback")，本次构建可能以 fuzz 方式应用，请在 linux-${series}.y 上生成 ${want}"
+            exit 0
+          fi
+
+          echo "| 状态 | **patches/ 中没有任何补丁**，构建必然失败 |" >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=BBRv3 补丁缺失::patches/ 中没有任何 bbrv3-linux-*.patch，无法构建"
+          exit 1
+
   cleanup:
     needs: preflight
     if: needs.preflight.outputs.build_needed == 'true'
