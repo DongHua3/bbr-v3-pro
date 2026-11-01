@@ -622,25 +622,39 @@ class TestBuildWorkflowDAGAndMatrix:
         assert "concurrency" in build_workflow_yaml
         conc = build_workflow_yaml["concurrency"]
         assert conc.get("group") == "bbrv3-kernel-build"
-        assert conc.get("cancel-in-progress") is True
+        # cancel-in-progress 按触发方式区分：手动触发掐掉旧任务，定时触发排队。
+        # 单次构建实测 80~100 分钟，被中途取消既白烧机时，也可能让 Release
+        # 只剩单架构的包。接受布尔值或引用了 workflow_dispatch 的表达式。
+        cip = conc.get("cancel-in-progress")
+        assert cip is True or (
+            isinstance(cip, str) and "workflow_dispatch" in cip
+        ), f"unexpected concurrency cancel-in-progress: {cip!r}"
 
         perms = build_workflow_yaml.get("permissions", {})
         assert perms.get("contents") == "write"
         assert perms.get("actions") == "write"
 
     def test_job_dependency_dag(self, build_workflow_yaml: dict):
-        """Verify the DAG edges: preflight -> cleanup -> build -> update-config-baseline."""
+        """Verify the DAG edges: preflight -> {cleanup || build} -> update-config-baseline."""
         jobs = build_workflow_yaml["jobs"]
         
         # cleanup needs preflight
         assert jobs["cleanup"].get("needs") == "preflight"
         assert "build_needed == 'true'" in jobs["cleanup"].get("if", "")
 
-        # build needs [preflight, cleanup]
+        # build 只依赖 preflight：cleanup 属保洁动作，失败不应让整天不出包。
         build_needs = jobs["build"].get("needs")
-        assert "preflight" in build_needs and "cleanup" in build_needs
-        assert "build_needed == 'true'" in jobs["build"].get("if", "")
-        assert "cleanup.result == 'success'" in jobs["build"].get("if", "")
+        if isinstance(build_needs, str):
+            build_needs = [build_needs]
+        assert "preflight" in build_needs
+        assert "cleanup" not in build_needs, (
+            "build 不应依赖 cleanup：清理历史失败会连带阻断编译与发布"
+        )
+        build_if = jobs["build"].get("if", "")
+        assert "build_needed == 'true'" in build_if
+        # always() 保证 preflight 的 skipped 兄弟任务不会让 build 被隐式跳过，
+        # 真正的闸门由 build_needed 条件表达式决定。
+        assert "always()" in build_if
 
         # update-config-baseline needs [preflight, build]
         baseline_needs = jobs["update-config-baseline"].get("needs")
