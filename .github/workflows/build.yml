@@ -14,8 +14,15 @@ name: 构建带有BBRv3的内核
         type: string
         default: ""
   schedule:
-    # Daily automatic kernel refresh. BBRv3 itself stays pinned to the repo patch.
-    - cron: "17 3 * * *"
+    # 每 6 小时一次；BBRv3 本身始终钉在仓库补丁上，与内核版本无关。
+    #
+    # 为什么不写「每天一次」：GitHub 的 schedule 调度器实测会晚 5~7 小时才创建
+    # run（手动触发则是秒级），且可能整天不跑。日频意味着一次延迟就吃掉整个
+    # 发布窗口。提到 6 小时后，新 stable 最迟约 12 小时内一定被发现。
+    #
+    # 成本可以忽略：没有新版本时 preflight 只跑几十秒就以 build_needed=false
+    # 退出，不占构建矩阵，也不产出任何 release。
+    - cron: "17 */6 * * *"
 
 env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -25,6 +32,9 @@ env:
 permissions:
   contents: write
   actions: write
+  # 失败时开 issue 提醒。没有这个权限，notify-failure 会以 403 结束，
+  # 失败告警本身失败——比没有告警更危险。
+  issues: write
 
 concurrency:
   group: bbrv3-kernel-build
@@ -471,5 +481,56 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add x86-64.config arm64.config
           git commit -m "Refresh generated kernel config baselines [skip ci]"
-          git pull --rebase origin "${{ github.ref_name }}" || true
+          # 浅克隆（actions/checkout 默认 fetch-depth: 1）下 rebase 容易失败。
+          # 失败就放弃本轮回写，不要在 rebase 半途的状态上硬推：配置基线晚一轮
+          # 更新没有危害，把 main 推坏有。
+          if ! git pull --rebase origin "${{ github.ref_name }}"; then
+            git rebase --abort 2>/dev/null || true
+            echo "::warning title=配置基线回写跳过::git pull --rebase 失败（浅克隆常见），本轮不更新基线"
+            exit 0
+          fi
           git push origin "HEAD:${{ github.ref_name }}"
+
+  notify-failure:
+    # build 被 skip（当天没有新版本）时两个 result 都不是 failure，不会触发。
+    # always() 是必需的：needs 里有失败任务时，不写 always() 本 job 会直接跳过。
+    needs: [preflight, build]
+    if: ${{ always() && (needs.preflight.result == 'failure' || needs.build.result == 'failure') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 开 issue 记录失败
+        # 这条流水线全自动：出包、发 Release、回写基线都不需要人看着。
+        # 没有告警的话，构建红了只会在 Actions 页面里躺着，直到有人恰好想起来
+        # 去看一眼——而那时坏包可能已经被用户下载了。
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '定时构建失败';
+            const repo = { owner: context.repo.owner, repo: context.repo.repo };
+            const runUrl = `${context.serverUrl}/${repo.owner}/${repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              `- 触发方式：\`${context.eventName}\``,
+              `- 内核版本：\`${{ needs.preflight.outputs.kernel_version || '未知（preflight 未产出）' }}\``,
+              `- 运行记录：${runUrl}`,
+              '',
+              '修复后请手动关闭本 issue。',
+            ].join('\n');
+
+            // 复用同一个 open issue，避免每天失败就刷一个新 issue。
+            // 不传 label：仓库没有预建 label，传不存在的 label 会让这个 API
+            // 返回 422，失败告警本身就失败了。
+            const open = await github.rest.issues.listForRepo({
+              ...repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const existing = open.data.find((i) => i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                ...repo,
+                issue_number: existing.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({ ...repo, title, body });
+            }
