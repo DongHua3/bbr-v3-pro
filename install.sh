@@ -1581,10 +1581,12 @@ validate_kernel_packages() {
     local extracted_cfg="$workdir/extracted.config"
     if extract_headers_config "${header_debs[0]}" "$extracted_cfg"; then
         assert_cloud_kernel_config "$extracted_cfg" || return 1
-    elif [[ -f "$workdir"/*.config ]]; then
+    else
         local ext_cfg
         for ext_cfg in "$workdir"/*.config; do
-            [[ -f "$ext_cfg" ]] && assert_cloud_kernel_config "$ext_cfg" || return 1
+            if [[ -f "$ext_cfg" ]]; then
+                assert_cloud_kernel_config "$ext_cfg" || return 1
+            fi
         done
     fi
     return 0
