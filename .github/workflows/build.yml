@@ -410,6 +410,12 @@ jobs:
             mkdir -p ./publish-markers
             touch "./publish-markers/${{ matrix.arch }}-${{ matrix.profile }}"
             echo "FORCE_REBUILD is enabled; publishing this build regardless of existing release."
+            if gh release view "$tag" >/dev/null 2>&1; then
+              for old_asset in $(gh release view "$tag" --json assets --jq '.assets[].name | select(startswith("linux-"))' 2>/dev/null || true); do
+                echo "Deleting superseded asset from $tag: $old_asset"
+                gh release delete-asset "$tag" "$old_asset" --yes || true
+              done
+            fi
           elif gh release view "$tag" >/dev/null 2>&1; then
             echo "PUBLISH_NEEDED=false" >> "$GITHUB_ENV"
             echo "$tag was published while this job was running; skipping upload and release."

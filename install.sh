@@ -1813,8 +1813,13 @@ install_bbrv3_kernel() {
     local asset_urls
     asset_urls=$(echo "$release_data" | jq -r --arg tag "$latest_tag" '
       if type=="array" then
-        .[] | select(.tag_name == $tag) | .assets[].browser_download_url
-        | select(test("(-dbg_|-dbgsym_)"; "i") | not)
+        .[] | select(.tag_name == $tag) | .assets
+        | (
+            (map(select((.name | test("^linux-image-.*\\.deb$"; "i")) and ((.name | test("(-dbg_|-dbgsym_)"; "i")) | not))) | sort_by(.updated_at // .name) | if length > 0 then [last] else [] end)
+            + (map(select(.name | test("^linux-headers-.*\\.deb$"; "i"))) | sort_by(.updated_at // .name) | if length > 0 then [last] else [] end)
+            + map(select((.name | test("^linux-"; "i")) | not))
+          )
+        | .[].browser_download_url
       else empty end
     ' 2>/dev/null || true)
 
