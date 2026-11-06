@@ -1521,9 +1521,9 @@ extract_headers_config() {
     local headers_deb="$1"
     local out_cfg="$2"
     local cfg_member
-    cfg_member="$(dpkg-deb --fsys-tarfile "$headers_deb" 2>/dev/null | tar -tf - 2>/dev/null | grep -E '^\./usr/src/linux-headers-[^/]+/\.config$' | head -n 1 || true)"
+    cfg_member="$(set +o pipefail; dpkg-deb --fsys-tarfile "$headers_deb" 2>/dev/null | tar -tf - 2>/dev/null | grep -E '^\./usr/src/linux-headers-[^/]+/\.config$' | head -n 1 || true)"
     [[ -n "$cfg_member" ]] || return 1
-    dpkg-deb --fsys-tarfile "$headers_deb" 2>/dev/null | tar -xOf - "$cfg_member" > "$out_cfg" 2>/dev/null || return 1
+    ( set +o pipefail; dpkg-deb --fsys-tarfile "$headers_deb" 2>/dev/null | tar -xOf - "$cfg_member" > "$out_cfg" 2>/dev/null ) || return 1
     [[ -s "$out_cfg" ]]
 }
 

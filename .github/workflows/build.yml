@@ -381,11 +381,21 @@ jobs:
             find ./kernel -maxdepth 1 \( -name '*-dbg*.deb' -o -name '*-dbgsym*.deb' \) -print
             exit 1
           fi
-          hdr_deb="$(find ./kernel -maxdepth 1 -name 'linux-headers-*.deb' | head -n 1 || true)"
-          if [ -z "$hdr_deb" ] || ! dpkg-deb -c "$hdr_deb" | grep -qE '/usr/src/linux-headers-[^/]+/\.config$'; then
-            echo "ERROR: linux-headers deb is missing embedded .config required for DKMS compatibility." >&2
+          headers_dir="$(mktemp -d)"
+          hdr_deb="$(find ./kernel -maxdepth 1 -name 'linux-headers-*.deb' -print -quit)"
+          if [ -z "$hdr_deb" ]; then
+            echo "ERROR: linux-headers deb was not generated." >&2
+            rm -rf "$headers_dir"
             exit 1
           fi
+          dpkg-deb --extract "$hdr_deb" "$headers_dir"
+          headers_config="$(find "$headers_dir/usr/src" -mindepth 2 -maxdepth 2 -name .config -print -quit)"
+          if [ -z "$headers_config" ] || ! cmp -s ./kernel/linux/.config "$headers_config"; then
+            echo "ERROR: linux-headers deb is missing embedded .config required for DKMS compatibility." >&2
+            rm -rf "$headers_dir"
+            exit 1
+          fi
+          rm -rf "$headers_dir"
           find ./kernel -maxdepth 1 -name 'linux-*.deb' -print | sort
           # 供安装脚本做完整性校验
           ( cd ./kernel && sha256sum linux-*.deb > SHA256SUMS )
