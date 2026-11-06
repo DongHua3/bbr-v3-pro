@@ -67,6 +67,28 @@ apply_policy_config() {
   scripts/config --disable INET6_ESP
   scripts/config --disable AF_RXRPC
   scripts/config --disable RXKAD
+  scripts/config --disable CRYPTO_USER_API_AEAD
+  scripts/config -d HYPERV_VTL_MODE
+
+  if [ "$arch" = "arm64" ]; then
+    scripts/config --disable CPU_BIG_ENDIAN
+  fi
+
+  scripts/config --disable SOUND
+  scripts/config --disable SND
+  scripts/config --disable MEDIA_SUPPORT
+  scripts/config --disable BT
+  scripts/config --disable NFC
+  scripts/config --disable WLAN
+  scripts/config --disable WIRELESS
+  scripts/config --disable HAMRADIO
+  scripts/config --disable GAMEPORT
+  scripts/config --disable INPUT_JOYSTICK
+  scripts/config --disable DRM_AMDGPU
+  scripts/config --disable DRM_NOUVEAU
+  scripts/config --disable DRM_I915
+  scripts/config --disable DRM_RADEON
+  scripts/config --disable DRM_XE
 
   scripts/config --enable HYPERV
   if [ "$arch" = "x86_64" ]; then
@@ -106,6 +128,8 @@ validate_config() {
   reject_enabled_config CONFIG_INET_ESP
   reject_enabled_config CONFIG_INET6_ESP
   reject_enabled_config CONFIG_AF_RXRPC
+  reject_enabled_config CONFIG_CRYPTO_USER_API_AEAD
+  reject_enabled_config CONFIG_HYPERV_VTL_MODE
   reject_enabled_config CONFIG_DEBUG_INFO
 
   require_config_line 'CONFIG_TCP_CONG_BBR=y' 'CONFIG_TCP_CONG_BBR is not built in.'

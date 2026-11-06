@@ -10,26 +10,42 @@ CVE-2026-31431 风险面检测脚本（仅检测，不利用）
 """
 
 import gzip
+import json
 import os
+import platform
 import socket
 import subprocess
+import sys
 from typing import Optional, Tuple
 
 
 def get_kernel_release() -> str:
-    return subprocess.check_output(["uname", "-r"], text=True).strip()
+    try:
+        out = subprocess.check_output(["uname", "-r"], text=True).strip()
+        if out:
+            return out
+    except (OSError, subprocess.SubprocessError):
+        pass
+    rel = platform.release().strip()
+    return rel if rel else "unknown"
 
 
 def read_kernel_config(kernel_release: str) -> Optional[str]:
     boot_cfg = f"/boot/config-{kernel_release}"
     if os.path.exists(boot_cfg):
-        with open(boot_cfg, "r", encoding="utf-8", errors="ignore") as f:
-            return f.read()
+        try:
+            with open(boot_cfg, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+        except OSError:
+            pass
 
     proc_cfg = "/proc/config.gz"
     if os.path.exists(proc_cfg):
-        with gzip.open(proc_cfg, "rt", encoding="utf-8", errors="ignore") as f:
-            return f.read()
+        try:
+            with gzip.open(proc_cfg, "rt", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+        except (OSError, gzip.BadGzipFile, EOFError):
+            return None
 
     return None
 
@@ -57,7 +73,8 @@ def is_module_loaded(module_name: str) -> bool:
     try:
         with open("/proc/modules", "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
-                if line.startswith(norm_name + " ") or line.startswith(module_name + " "):
+                tokens = line.split()
+                if tokens and tokens[0] in (norm_name, module_name):
                     return True
     except OSError:
         return False
@@ -129,7 +146,9 @@ def has_rule(text: str, rule: str) -> bool:
     return False
 
 
-def main() -> None:
+def main(json_output: bool = False) -> None:
+    if "--json" in sys.argv[1:]:
+        json_output = True
     kernel = get_kernel_release()
     cfg = read_kernel_config(kernel)
     aead_cfg = parse_aead_config(cfg)
@@ -174,27 +193,28 @@ def main() -> None:
     esp6_loaded = is_module_loaded("esp6")
     rxrpc_loaded = is_module_loaded("rxrpc")
 
-    print(f"[*] 当前内核: {kernel}")
-    print("")
-    print("[CVE-2026-31431 检测]")
-    print(f"[*] CONFIG_CRYPTO_USER_API_AEAD: {aead_cfg}")
-    print(f"[*] algif_aead 已加载: {mod_loaded}")
-    print(f"[*] algif_aead 黑名单规则完整: {aead_rules_ok} ({security_conf_path})")
-    print(f"[*] AF_ALG AEAD bind 可用: {bind_ok} ({bind_msg})")
+    if not json_output:
+        print(f"[*] 当前内核: {kernel}")
+        print("")
+        print("[CVE-2026-31431 检测]")
+        print(f"[*] CONFIG_CRYPTO_USER_API_AEAD: {aead_cfg}")
+        print(f"[*] algif_aead 已加载: {mod_loaded}")
+        print(f"[*] algif_aead 黑名单规则完整: {aead_rules_ok} ({security_conf_path})")
+        print(f"[*] AF_ALG AEAD bind 可用: {bind_ok} ({bind_msg})")
 
-    print("")
-    print("[Dirty Frag 检测]")
-    print(f"[*] CONFIG_XFRM_ESP: {xfrm_esp}")
-    print(f"[*] CONFIG_INET_ESP: {inet_esp}")
-    print(f"[*] CONFIG_INET6_ESP: {inet6_esp}")
-    print(f"[*] CONFIG_AF_RXRPC: {af_rxrpc}")
-    print(f"[*] esp4 已加载: {esp4_loaded}")
-    print(f"[*] esp6 已加载: {esp6_loaded}")
-    print(f"[*] rxrpc 已加载: {rxrpc_loaded}")
-    print(f"[*] Dirty Frag 黑名单规则完整: {dirtyfrag_rules_ok} ({security_conf_path})")
+        print("")
+        print("[Dirty Frag 检测]")
+        print(f"[*] CONFIG_XFRM_ESP: {xfrm_esp}")
+        print(f"[*] CONFIG_INET_ESP: {inet_esp}")
+        print(f"[*] CONFIG_INET6_ESP: {inet6_esp}")
+        print(f"[*] CONFIG_AF_RXRPC: {af_rxrpc}")
+        print(f"[*] esp4 已加载: {esp4_loaded}")
+        print(f"[*] esp6 已加载: {esp6_loaded}")
+        print(f"[*] rxrpc 已加载: {rxrpc_loaded}")
+        print(f"[*] Dirty Frag 黑名单规则完整: {dirtyfrag_rules_ok} ({security_conf_path})")
 
-    print("")
-    print("[检测结论]")
+        print("")
+        print("[检测结论]")
 
     cfg_present = cfg is not None
 
@@ -240,6 +260,32 @@ def main() -> None:
             or (cfg_present and dirtyfrag_rules_ok and not dirtyfrag_has_builtin)
         )
     )
+
+    if json_output:
+        report = {
+            "kernel": kernel,
+            "cve_2026_31431": {
+                "config_crypto_user_api_aead": aead_cfg,
+                "algif_aead_loaded": mod_loaded,
+                "blacklist_rules_ok": aead_rules_ok,
+                "af_alg_bind_ok": bind_ok,
+                "af_alg_bind_msg": bind_msg,
+                "status": "high_risk" if cve_high_risk else ("reduced" if cve_reduced else "uncertain"),
+            },
+            "dirty_frag": {
+                "config_xfrm_esp": xfrm_esp,
+                "config_inet_esp": inet_esp,
+                "config_inet6_esp": inet6_esp,
+                "config_af_rxrpc": af_rxrpc,
+                "esp4_loaded": esp4_loaded,
+                "esp6_loaded": esp6_loaded,
+                "rxrpc_loaded": rxrpc_loaded,
+                "blacklist_rules_ok": dirtyfrag_rules_ok,
+                "status": "high_risk" if dirtyfrag_high_risk else ("reduced" if dirtyfrag_reduced else "uncertain"),
+            },
+        }
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
 
     if cve_high_risk:
         print("[!] 检测到高风险暴露面。")

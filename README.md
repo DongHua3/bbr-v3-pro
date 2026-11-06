@@ -90,7 +90,7 @@ sudo bash /tmp/bbr.sh --status
 
 ```text
 ==================== BBR 状态与系统体检 ====================
-脚本版本       : 2.0.2
+脚本版本       : 2.1.0
 系统内核版本   : 6.1.0-50-amd64
 TCP 拥塞控制   : cubic
 UDP 套接字缓冲 : 8192 KB (系统默认)
@@ -132,7 +132,7 @@ TCP 拥塞控制   : bbr (v3)
 队列管理算法   : fq
 UDP 套接字缓冲 : 16 MB (AI/Hy2 专属大水管)
 物理内存状态   : 712 MB (已开启 40% 防 OOM 保护)
-持久化优化配置 : 已加载 (/etc/sysctl.d/99-bbr-v3-pro.conf)
+持久化优化配置 : 已加载 (/etc/sysctl.d/99-z-bbr-v3-pro.conf)
 ```
 
 重启一次，重连后再看，输出不变即说明持久化配置已能开机自加载。
@@ -144,18 +144,21 @@ UDP 套接字缓冲 : 16 MB (AI/Hy2 专属大水管)
 | 想做什么 | 命令 |
 |---|---|
 | 看状态与体检 | `--status` |
-| 装 / 升级 BBRv3 内核 | `--install-kernel` |
+| 装 / 升级最新 BBRv3 内核 | `--install-kernel` |
+| 安装指定版本 BBRv3 内核 | `--install-kernel=<ver>`（如 `--install-kernel=7.3.1`） |
 | 只启用 BBR，不动缓冲区 | `--apply-bbr` |
 | 综合调优（推荐） | `--tune=ai-gateway` |
-| 按实测带宽延迟精算 | `--tune=smart` |
+| 按实测带宽延迟精算 | `--tune=smart [--bw=500 --rtt=180]` |
 | 亚太低延迟线路 | `--tune=apac` |
+| 安全禁用 / 恢复 IPv6 | `--disable-ipv6` / `--restore-ipv6` |
 | 排查端口占用 | `--check-ports` |
 | 清空网络参数 | `--clean` |
-| 卸载自建内核 | `--uninstall-kernel` |
-| 彻底卸载工具 | `--uninstall-all` |
+| 卸载自建内核 | `--uninstall-kernel [--yes]` |
+| 彻底卸载工具 | `--uninstall-all [--yes]` |
 | 更新脚本本体 | `--update` |
 | 查看版本 | `--version` |
 | CVE 缓解 | `--mitigate-cve` |
+| 无人值守确认 / 跳过重启 | `--yes` (`-y`) / `--no-reboot` |
 
 以上命令均需 root 权限执行，例如 `sudo bash /tmp/bbr.sh --status`；已装好快捷命令的可直接用 `bbr --status`。
 
@@ -179,12 +182,14 @@ UDP 套接字缓冲 : 16 MB (AI/Hy2 专属大水管)
 | 10 | 卸载自建 BBRv3 内核 | 校验官方备用内核后回滚 GRUB 引导 |
 | 11 | 彻底卸载 bbr-v3-pro | 清空配置、删除快捷命令与临时文件 |
 | 12 | 更新 bbr-v3-pro 到最新版 | 一键升级快捷命令，支持识别 Fork 仓库 |
+| 13 | 安全禁用 IPv6 | 含当前 SSH 会话防失联检测与可逆状态备份 |
+| 14 | 恢复 IPv6 默认状态 | 还原禁用前保存的 IPv6 快照并清理持久化文件 |
 | 0 | 退出管理系统 | 退出当前控制台 |
 
 ### 更新与版本
 
 ```bash
-bbr --version        # bbr-v3-pro v2.0.2
+bbr --version        # bbr-v3-pro v2.1.0
 bbr --update         # 把快捷命令更新到最新版
 ```
 
@@ -390,7 +395,7 @@ sysctl net.core.rmem_max net.ipv4.tcp_rmem
 **第二步：看持久化配置**
 
 ```bash
-cat /etc/sysctl.d/99-bbr-v3-pro.conf
+cat /etc/sysctl.d/99-z-bbr-v3-pro.conf
 ```
 
 正常应包含两对清晰的段标记：
@@ -569,13 +574,15 @@ bbr-v3-pro/
 │   └── lint.yml                  # 静态语法与格式检查
 ├── patches/                      # BBRv3 主线内核移植补丁 (7.0 / 7.1 / 7.2 / 7.3)
 ├── scripts/
-│   ├── apply-bbrv3-port.sh       # 补丁版本排序 (sort -V) 与模糊匹配兜底
-│   └── prepare-kernel-config.sh  # 内核配置策略注入与自寻址准备
-├── tests/                        # 自动化回归与端到端测试套件 (176 项用例)
-├── arm64.config                  # ARM64 内核配置 (含 12 项 Hyper-V 驱动)
-├── x86-64.config                 # x86_64 内核配置 (含 12 项 Hyper-V 驱动)
-├── cve_2026_31431_detector.py    # 运行态 CVE 检测脚本 (防主动装载)
-├── install.sh                    # 核心管理脚本 (v2.0.2)
+│   ├── apply-bbrv3-port.sh           # 补丁版本排序 (sort -V) 与模糊匹配兜底
+│   ├── kernel-source.sh              # 上游内核精确标签解析、SHA 校验与多源回退
+│   ├── prepare-kernel-config.sh      # 内核配置策略注入、精简与自寻址准备
+│   └── prepare-kernel-packaging.sh   # 注入 linux-headers .config 保障 DKMS 兼容
+├── tests/                            # 自动化回归与端到端测试套件
+├── arm64.config                      # ARM64 内核配置 (含 12 项 Hyper-V 驱动)
+├── x86-64.config                     # x86_64 内核配置 (含 12 项 Hyper-V 驱动)
+├── cve_2026_31431_detector.py        # 运行态 CVE 检测脚本 (防主动装载 / 支持 --json)
+├── install.sh                        # 核心管理脚本 (v2.1.0)
 ├── LICENSE                       # MIT 开源协议
 └── README.md                     # 完整技术手册与使用指南
 ```

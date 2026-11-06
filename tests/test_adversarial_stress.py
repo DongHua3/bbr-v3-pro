@@ -98,29 +98,21 @@ class TestDetectorConfigScenarios:
             assert "已收敛" not in captured
 
     def test_corrupted_proc_config_gz_vulnerability_discovery(self, detector_module):
-        """EMPIRICAL FINDING: read_kernel_config crashes with BadGzipFile if /proc/config.gz is corrupted."""
+        """Verify read_kernel_config catches BadGzipFile on corrupted /proc/config.gz and returns None cleanly."""
         with patch("os.path.exists", side_effect=lambda p: p == "/proc/config.gz"):
             with patch("gzip.open", side_effect=gzip.BadGzipFile("Not a gzipped file")):
-                try:
-                    res = detector_module.read_kernel_config("6.8.0")
-                    crashed = False
-                except gzip.BadGzipFile:
-                    crashed = True
-                assert crashed is True, (
-                    "Empirically reproduces: read_kernel_config lacks try/except BadGzipFile on /proc/config.gz"
+                res = detector_module.read_kernel_config("6.8.0")
+                assert res is None, (
+                    "read_kernel_config must catch BadGzipFile on /proc/config.gz and return None"
                 )
 
     def test_unreadable_boot_config_permission_error_discovery(self, detector_module):
-        """EMPIRICAL FINDING: read_kernel_config crashes with PermissionError if /boot/config-* is chmod 000."""
+        """Verify read_kernel_config catches PermissionError on /boot/config-* and falls back cleanly without crashing."""
         with patch("os.path.exists", side_effect=lambda p: "/boot/config-" in p):
             with patch("builtins.open", side_effect=PermissionError("Permission denied")):
-                try:
-                    res = detector_module.read_kernel_config("6.8.0")
-                    crashed = False
-                except PermissionError:
-                    crashed = True
-                assert crashed is True, (
-                    "Empirically reproduces: read_kernel_config lacks try/except PermissionError/OSError"
+                res = detector_module.read_kernel_config("6.8.0")
+                assert res is None, (
+                    "read_kernel_config must catch PermissionError/OSError and return None when fallback is absent"
                 )
 
     @pytest.mark.parametrize("invalid_val", [
@@ -171,11 +163,11 @@ class TestDetectorProcModulesScenarios:
     """Stress-test /proc/modules parsing under corrupted and adversarial formats."""
 
     def test_proc_modules_tab_separator_discovery(self, detector_module):
-        """EMPIRICAL FINDING: is_module_loaded relies strictly on space (' ') and fails on tab ('\\t')."""
+        """Verify is_module_loaded recognizes both space and tab ('\\t') separators in /proc/modules."""
         tab_content = "algif_aead\t16384\t0\t-\tLive\t0x00000000\n"
         with patch("builtins.open", mock_open(read_data=tab_content)):
             is_loaded = detector_module.is_module_loaded("algif_aead")
-            assert is_loaded is False, "Empirically verifies: tab-separated /proc/modules is not recognized"
+            assert is_loaded is True, "Tab-separated /proc/modules must be recognized as loaded"
 
     def test_proc_modules_prefix_collision_safety(self, detector_module):
         """Ensure modules with identical prefixes (e.g. esp4_custom, algif_aead_mod) do NOT cause false positives."""
@@ -539,8 +531,11 @@ EOF
         assert res.returncode == 0
         assert "FALLBACK=[]" in res.stdout.strip(), "rc packages must NOT be counted as fallback kernels"
 
-    def test_dpkg_held_packages_hi_status_discovery(self):
-        """EMPIRICAL FINDING: Packages on 'hold' ('hi' status) are NOT matched by awk '/^ii/'."""
+    def test_dpkg_held_packages_hi_status_discovery(self, install_script_path: Path):
+        """Verify packages on 'hold' ('hi' status) ARE matched by awk '/^[ih]i/' in install.sh."""
+        content = install_script_path.read_text(encoding="utf-8")
+        assert "/^[ih]i/" in content, "install.sh must match both ii and hi (held) kernel packages"
+
         dpkg_mock = """
 hi  linux-image-unsigned-6.8.0-45-generic 6.8.0-45.45 amd64 Pinned official kernel
 ii  linux-image-6.12.0-bbrv3              6.12.0-1    amd64 BBRv3 kernel
@@ -550,14 +545,13 @@ ii  linux-image-6.12.0-bbrv3              6.12.0-1    amd64 BBRv3 kernel
 {dpkg_mock}
 EOF
         }}
-        fallback_kernels=$(mock_dpkg | awk '/^ii/ && $2 ~ /^linux-image-(unsigned-)?[0-9]/ && ($2 !~ /bbrv3/ && $2 !~ /joeyblog/) {{print $2}}' | tr '\\n' ' ')
+        fallback_kernels=$(mock_dpkg | awk '/^[ih]i/ && $2 ~ /^linux-image-(unsigned-)?[0-9]/ && ($2 !~ /bbrv3/ && $2 !~ /joeyblog/) {{print $2}}' | tr '\\n' ' ')
         echo "FALLBACK=[$fallback_kernels]"
         """
         res = run_bash_cmd(cmd)
         assert res.returncode == 0
-        # Empirically verify that 'hi' status packages are skipped by /^ii/
-        assert "FALLBACK=[]" in res.stdout.strip(), (
-            "Empirically reproduces: held kernel packages with 'hi' status are excluded from fallback detection"
+        assert "linux-image-unsigned-6.8.0-45-generic" in res.stdout.strip(), (
+            "Held kernel packages with 'hi' status must be included in fallback detection"
         )
 
 
@@ -698,6 +692,60 @@ class TestInstallScriptSysctlNorm:
         """
         res = run_bash_cmd(cmd)
         assert res.stdout.strip() == expected
+
+
+class TestAbsorbedUpstreamAndOptimizationFeatures:
+    """Verify newly absorbed upstream features and optimization fixes."""
+
+    def test_kernel_source_sh_syntax_and_tag_candidates(self, repo_root: Path):
+        """Verify scripts/kernel-source.sh passes bash -n and generates vX.Y / vX.Y.Z tags."""
+        script = repo_root / "scripts" / "kernel-source.sh"
+        assert script.is_file(), "scripts/kernel-source.sh must exist"
+        res = run_bash_cmd(f"bash -n '{to_posix_path(script)}'")
+        assert res.returncode == 0, f"bash -n kernel-source.sh failed: {res.stderr}"
+
+    def test_prepare_kernel_packaging_injects_config_idempotently(self, repo_root: Path, tmp_path: Path):
+        """Verify scripts/prepare-kernel-packaging.sh injects .config copy into install-extmod-build."""
+        script = repo_root / "scripts" / "prepare-kernel-packaging.sh"
+        assert script.is_file(), "scripts/prepare-kernel-packaging.sh must exist"
+
+        pkg_dir = tmp_path / "scripts" / "package"
+        pkg_dir.mkdir(parents=True)
+        extmod = pkg_dir / "install-extmod-build"
+        extmod.write_text('#!/bin/sh\ncp -a include "${destdir}/"\n', encoding="utf-8")
+
+        res1 = run_bash_cmd(f"bash '{to_posix_path(script)}' '{to_posix_path(tmp_path)}'")
+        assert res1.returncode == 0
+        updated = extmod.read_text(encoding="utf-8")
+        assert 'cp "${KCONFIG_CONFIG:-.config}" "${destdir}/.config"' in updated
+
+        # Idempotent second run
+        res2 = run_bash_cmd(f"bash '{to_posix_path(script)}' '{to_posix_path(tmp_path)}'")
+        assert res2.returncode == 0
+        assert extmod.read_text(encoding="utf-8").count('cp "${KCONFIG_CONFIG:-.config}" "${destdir}/.config"') == 1
+
+    def test_detector_json_output_mode(self, detector_module, capsys):
+        """Verify cve_2026_31431_detector.py supports json_output=True."""
+        import json
+        with patch.object(detector_module, "get_kernel_release", return_value="7.3.1-bbrv3"), \
+             patch.object(detector_module, "read_kernel_config", return_value="# CONFIG_CRYPTO_USER_API_AEAD is not set\n"), \
+             patch.object(detector_module, "read_security_conf", return_value="blacklist esp4\ninstall esp4 /bin/false\nblacklist esp6\ninstall esp6 /bin/false\nblacklist rxrpc\ninstall rxrpc /bin/false\n"), \
+             patch.object(detector_module, "is_module_loaded", return_value=False), \
+             patch.object(detector_module, "check_af_alg_aead_bind", return_value=(False, "跳过")):
+            detector_module.main(json_output=True)
+            out = capsys.readouterr().out
+            data = json.loads(out)
+            assert data["kernel"] == "7.3.1-bbrv3"
+            assert data["cve_2026_31431"]["status"] == "reduced"
+
+    def test_apac_tuning_includes_memory_clamping_and_backlog(self, install_script_path: Path):
+        """Verify apply_apac_tuning includes apply_safe_tcp_mem, apply_safe_somaxconn, and TARGET_BACKLOG."""
+        content = install_script_path.read_text(encoding="utf-8")
+        apac_func = content.split("apply_apac_tuning()")[1].split("clear_network_tuning()")[0]
+        assert "apply_safe_tcp_mem" in apac_func
+        assert "apply_safe_somaxconn" in apac_func
+        assert "TARGET_BACKLOG" in apac_func
+        assert "emit_guarded_tune_lines" in apac_func
 
 
 if __name__ == "__main__":

@@ -15,11 +15,17 @@ set -u
 #   主版本 不兼容变更（配置文件路径、CLI 参数语义、菜单编号调整）
 #   次版本 新增功能（新调优预设、新 CLI 参数、新检查项）
 #   修订号 缺陷修复、文案与显示修正
-BBR_SCRIPT_VERSION="2.0.2"
+BBR_SCRIPT_VERSION="2.1.0"
 
-# GitHub 仓库配置 (支持环境变量覆盖)
+# 核心路径与仓库常量（提前定义，供 self_update 与早期参数解析复用）
+QUICK_COMMAND_PATH="/usr/local/bin/bbr"
 UPSTREAM_REPO="DongHua3/bbr-v3-pro"
 GITHUB_REPO="${GITHUB_REPO:-${BBR_REPO:-$UPSTREAM_REPO}}"
+GITHUB_API_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+ASSUME_YES="${BBR_ASSUME_YES:-0}"
+NO_REBOOT="${BBR_NO_REBOOT:-0}"
+CLI_BW="${BBR_BW:-}"
+CLI_RTT="${BBR_RTT:-}"
 
 # ==============================================================================
 #  自更新：把快捷命令更新到最新版
@@ -27,14 +33,13 @@ GITHUB_REPO="${GITHUB_REPO:-${BBR_REPO:-$UPSTREAM_REPO}}"
 #
 #  注意：本函数定义在脚本顶部，因为 --update 参数分支在 root 与发行版检查
 #  之前就要用到它（更新自身不应依赖被更新的环境）。
-#  仓库配置已在上方提前初始化，目标路径使用字面路径（不依赖稍后定义的 QUICK_COMMAND_PATH）。
 # ==============================================================================
 self_update() {
     local force="${1:-0}"
-    local target="/usr/local/bin/bbr"
+    local target="$QUICK_COMMAND_PATH"
     local repo="${GITHUB_REPO:-$UPSTREAM_REPO}"
     local url="https://raw.githubusercontent.com/${repo}/main/install.sh"
-    local tmp new tver
+    local tmp new
     echo "当前版本: v$BBR_SCRIPT_VERSION"
     echo "正在获取最新版..."
 
@@ -132,20 +137,26 @@ fi
 show_help() {
     echo "bbr-v3-pro v$BBR_SCRIPT_VERSION"
     echo "用法: $0 [选项]"
-    echo "  --version             查看脚本版本"
-    echo "  --update [--force]    把快捷命令 bbr 更新到最新版（--force 强制覆盖）"
-    echo "  --status              查看当前网络状态与内核版本"
-    echo "  --install-kernel      安装/更新 BBRv3 内核"
-    echo "  --apply-bbr           启用系统原生 BBR + FQ"
-    echo "  --tune=ai-gateway     应用 AI 网关与跨洋全栈优化（推荐默认）"
-    echo "  --tune=smart          应用智能 BDP 动态带宽优化"
-    echo "  --tune=apac           应用亚太短链路低延迟优化"
-    echo "  --check-ports         检查关键端口占用状态"
-    echo "  --clean               清空所有调优配置恢复出厂默认"
-    echo "  --mitigate-cve        应用 Dirty Frag 与 CVE-2026-31431 安全缓解 (写入黑名单并卸载高危模块)"
-    echo "  --uninstall-kernel    安全卸载 BBRv3 内核并回滚引导"
-    echo "  --uninstall-all       彻底卸载工具与所有网络配置"
-    echo "  --help                查看此帮助信息"
+    echo "  --version                  查看脚本版本"
+    echo "  --update [--force]         把快捷命令 bbr 更新到最新版（--force 强制覆盖）"
+    echo "  --status                   查看当前网络状态与内核版本"
+    echo "  --install-kernel           安装/更新最新版 BBRv3 内核"
+    echo "  --install-kernel=<ver>     安装指定版本 BBRv3 内核（如 6.12.5）"
+    echo "  --apply-bbr                启用系统原生 BBR + FQ"
+    echo "  --tune=ai-gateway          应用 AI 网关与跨洋全栈优化（推荐默认）"
+    echo "  --tune=smart               应用智能 BDP 动态带宽优化（可配合 --bw= 与 --rtt=）"
+    echo "  --tune=apac                应用亚太短链路低延迟优化"
+    echo "  --disable-ipv6             安全禁用 IPv6（含 SSH 防失联检测与可逆状态备份）"
+    echo "  --restore-ipv6             恢复禁用前的 IPv6 状态"
+    echo "  --check-ports              检查关键端口占用状态"
+    echo "  --clean                    清空所有调优配置恢复出厂默认"
+    echo "  --mitigate-cve             应用 Dirty Frag 与 CVE-2026-31431 安全缓解 (写入黑名单并卸载高危模块)"
+    echo "  --uninstall-kernel         安全卸载 BBRv3 内核并回滚引导"
+    echo "  --uninstall-all            彻底卸载工具与所有网络配置"
+    echo "  --yes, -y                  无人值守自动确认（默认不立即重启）"
+    echo "  --no-reboot                安装/卸载内核后不触发重启"
+    echo "  --bw=<Mbps> --rtt=<ms>     配合 --tune=smart 指定非交互式带宽与延迟"
+    echo "  --help                     查看此帮助信息"
 }
 
 # 信息类参数提前处理：不依赖 root 与发行版，非 Debian 或普通用户也能查
@@ -195,12 +206,9 @@ OLD_SYSCTL_CONF="/etc/sysctl.d/99-bbr-v3-pro.conf"
 LEGACY_SYSCTL_CONF="/etc/sysctl.conf"
 MODULES_CONF="/etc/modules-load.d/bbr-v3-pro-qdisc.conf"
 SECURITY_MODPROBE_CONF="/etc/modprobe.d/99-bbr-v3-pro-security.conf"
-QUICK_COMMAND_PATH="/usr/local/bin/bbr"
-
-# GitHub 仓库配置 (支持环境变量覆盖)
-UPSTREAM_REPO="DongHua3/bbr-v3-pro"
-GITHUB_REPO="${GITHUB_REPO:-${BBR_REPO:-$UPSTREAM_REPO}}"
-GITHUB_API_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+IPV6_SYSCTL_CONF="/etc/sysctl.d/99-bbr-v3-pro-ipv6.conf"
+IPV6_BACKUP_STATE="/var/lib/bbr-v3-pro/ipv6-before-disable"
+BOOTLOADER_BACKUP_DIR="/var/lib/bbr-v3-pro/bootloader-backup"
 
 # 依赖修复与检查
 check_and_install_deps() {
@@ -557,33 +565,15 @@ neutralize_sysctl_conf_conflicts() {
 
     (( ${#target_files[@]} == 0 )) && return 0
 
-    local -a managed_keys=(
-        "net.core.default_qdisc"
-        "net.ipv4.tcp_congestion_control"
-        "net.core.rmem_max"
-        "net.core.wmem_max"
-        "net.core.netdev_max_backlog"
-        "net.core.somaxconn"
-        "net.ipv4.tcp_rmem"
-        "net.ipv4.tcp_wmem"
-        "net.ipv4.tcp_mem"
-        "net.ipv4.tcp_limit_output_bytes"
-        "net.ipv4.tcp_slow_start_after_idle"
-        "net.ipv4.tcp_window_scaling"
-        "net.ipv4.tcp_mtu_probing"
-        "net.ipv4.tcp_notsent_lowat"
-    )
+    local keys_regex='net\.core\.default_qdisc|net\.ipv4\.tcp_congestion_control|net\.core\.rmem_max|net\.core\.wmem_max|net\.core\.netdev_max_backlog|net\.core\.somaxconn|net\.ipv4\.tcp_rmem|net\.ipv4\.tcp_wmem|net\.ipv4\.tcp_mem|net\.ipv4\.tcp_limit_output_bytes|net\.ipv4\.tcp_slow_start_after_idle|net\.ipv4\.tcp_window_scaling|net\.ipv4\.tcp_mtu_probing|net\.ipv4\.tcp_notsent_lowat'
 
-    local target_file key found=0
+    local target_file found=0
     for target_file in "${target_files[@]}"; do
         [[ -w "$target_file" ]] || continue
-        for key in "${managed_keys[@]}"; do
-            local escaped_key="${key//\./\\.}"
-            if grep -Eq "^[[:space:]]*${escaped_key}[[:space:]]*=" "$target_file" 2>/dev/null; then
-                $SUDO sed -i -E "s|^([[:space:]]*${escaped_key}[[:space:]]*=.*)$|# [bbr-v3-pro override] \1|" "$target_file" 2>/dev/null || true
-                found=$((found + 1))
-            fi
-        done
+        if grep -Eq "^[[:space:]]*(${keys_regex})[[:space:]]*=" "$target_file" 2>/dev/null; then
+            $SUDO sed -i -E "s/^([[:space:]]*(${keys_regex})[[:space:]]*=.*)$/# [bbr-v3-pro override] \1/" "$target_file" 2>/dev/null || true
+            found=$((found + 1))
+        fi
     done
 
     if (( found > 0 )); then
@@ -853,6 +843,7 @@ report_qdisc_application() {
 apply_bbr_and_qdisc() {
     local algo="${1:-bbr}"
     local qdisc="${2:-fq}"
+    local defer_finalize="${3:-0}"
 
     sysctl_reset_counters
     log_info "正在配置拥塞算法 [$algo] 与队列调度 [$qdisc]..."
@@ -877,6 +868,11 @@ EOF
     # 声明，重启后 systemd-sysctl 应用 default_qdisc 时模块可能尚未加载，
     # 该行会被忽略，队列静默回退到默认值 —— 表现为"设置成功但重启后失效"。
     persist_qdisc_module "$qdisc"
+
+    if (( defer_finalize )); then
+        report_qdisc_application "$qdisc"
+        return 0
+    fi
 
     $SUDO sysctl --system >/dev/null 2>&1
     sysctl_report || log_warn "部分参数未生效，持久化配置已写入 $SYSCTL_CONF。"
@@ -906,8 +902,8 @@ apply_ai_gateway_tuning() {
     local qdisc="fq"
     local output_bytes="4194304"
 
-    # 算法归 qdisc 段，本函数只负责 tune 段
-    apply_bbr_and_qdisc "$algo" "$qdisc"
+    # 算法归 qdisc 段，本函数只负责 tune 段（defer_finalize=1 避免重复 sysctl --system）
+    apply_bbr_and_qdisc "$algo" "$qdisc" 1
 
     # 1. 运行时立即应用（算法参数已由 apply_bbr_and_qdisc 写入并校验）
     # 复位跳过标记：这两个是全局变量，且 apply_safe_* 是否跳过取决于系统现状
@@ -971,27 +967,42 @@ apply_smart_bandwidth_tuning() {
     local qdisc="fq"
     local output_bytes="4194304"
 
-    read -r -p "请输入 VPS 峰值带宽 (Mbps，直接回车默认 100): " user_bw
-    user_bw=$(echo "$user_bw" | tr -d '[:space:]')
-    [[ -z "$user_bw" || ! "$user_bw" =~ ^[0-9]+$ ]] && user_bw=100
+    local user_bw="${CLI_BW:-}"
+    local rtt_ms="${CLI_RTT:-}"
 
-    echo -e "\n请选择您的主要目标链路延迟特征："
-    echo -e "  1. 美西 / 欧美长链路 (RTT 约 150ms ~ 250ms，美区住宅/VPS 推荐)"
-    echo -e "  2. 亚太近距离链路 (RTT 约 30ms ~ 80ms，香港/日本/新加坡)"
-    echo -e "  3. 自定义输入延迟 (ms)"
-    read -r -p "请选择 [1-3] (回车默认 1): " rtt_choice
-    rtt_choice=$(echo "$rtt_choice" | tr -d '[:space:]')
-    
-    local rtt_ms=180
-    case "$rtt_choice" in
-        2) rtt_ms=60 ;;
-        3) 
-            read -r -p "请输入真实单程延迟 (毫秒，例如 180): " user_rtt
-            user_rtt=$(echo "$user_rtt" | tr -d '[:space:]')
-            [[ -n "$user_rtt" && "$user_rtt" =~ ^[0-9]+$ ]] && rtt_ms=$user_rtt
-            ;;
-        *) rtt_ms=180 ;;
-    esac
+    if [[ -z "$user_bw" ]]; then
+        if [[ -t 0 && "${ASSUME_YES:-0}" != "1" ]]; then
+            read -r -p "请输入 VPS 峰值带宽 (Mbps，直接回车默认 100): " user_bw
+        else
+            user_bw="100"
+        fi
+    fi
+    user_bw=$(echo "$user_bw" | tr -d '[:space:]')
+    [[ -z "$user_bw" || ! "$user_bw" =~ ^[0-9]+$ || "$user_bw" -le 0 ]] && user_bw=100
+
+    if [[ -z "$rtt_ms" || ! "$rtt_ms" =~ ^[0-9]+$ || "$rtt_ms" -le 0 ]]; then
+        if [[ -t 0 && "${ASSUME_YES:-0}" != "1" ]]; then
+            echo -e "\n请选择您的主要目标链路延迟特征："
+            echo -e "  1. 美西 / 欧美长链路 (RTT 约 150ms ~ 250ms，美区住宅/VPS 推荐)"
+            echo -e "  2. 亚太近距离链路 (RTT 约 30ms ~ 80ms，香港/日本/新加坡)"
+            echo -e "  3. 自定义输入延迟 (ms)"
+            read -r -p "请选择 [1-3] (回车默认 1): " rtt_choice
+            rtt_choice=$(echo "$rtt_choice" | tr -d '[:space:]')
+
+            rtt_ms=180
+            case "$rtt_choice" in
+                2) rtt_ms=60 ;;
+                3)
+                    read -r -p "请输入真实单程延迟 (毫秒，例如 180): " user_rtt
+                    user_rtt=$(echo "$user_rtt" | tr -d '[:space:]')
+                    [[ -n "$user_rtt" && "$user_rtt" =~ ^[0-9]+$ && "$user_rtt" -gt 0 ]] && rtt_ms=$user_rtt
+                    ;;
+                *) rtt_ms=180 ;;
+            esac
+        else
+            rtt_ms=180
+        fi
+    fi
 
     # BDP 计算公式: BDP(Bytes) = (带宽(Mbps) * 10^6 / 8) * (延迟(ms) / 1000)
     # 结合 BBR 的动态拥塞窗口增益系数 (~2.5x - 3x BDP) 留足突发空间
@@ -1006,8 +1017,8 @@ apply_smart_bandwidth_tuning() {
         log_warn "计算结果超出小内存安全线，已触发安全钳位限制为: $((MAX_SOCKET_BYTES / 1024 / 1024)) MB"
     fi
 
-    # 算法归 qdisc 段，本函数只负责 tune 段
-    apply_bbr_and_qdisc "$algo" "$qdisc"
+    # 算法归 qdisc 段，本函数只负责 tune 段（defer_finalize=1 避免重复 sysctl --system）
+    apply_bbr_and_qdisc "$algo" "$qdisc" 1
 
     SKIP_SOMAXCONN=0
     SKIP_TCP_MEM=0
@@ -1064,26 +1075,39 @@ apply_apac_tuning() {
         apac_buffer=$MAX_SOCKET_BYTES
     fi
 
-    # 算法归 qdisc 段，本函数负责完整生效 BBR + FQ
-    apply_bbr_and_qdisc "$algo" "$qdisc"
+    # 算法归 qdisc 段，本函数负责完整生效 BBR + FQ（defer_finalize=1 避免重复 sysctl --system）
+    apply_bbr_and_qdisc "$algo" "$qdisc" 1
 
     # 1. 运行时立即应用并回读校验
+    SKIP_SOMAXCONN=0
+    SKIP_TCP_MEM=0
     sysctl_apply_verify net.core.rmem_max "$apac_buffer"
     sysctl_apply_verify net.core.wmem_max "$apac_buffer"
+    sysctl_apply_verify net.core.netdev_max_backlog "$TARGET_BACKLOG"
+    apply_safe_somaxconn
     sysctl_apply_verify net.ipv4.tcp_rmem "4096 131072 $apac_buffer"
     sysctl_apply_verify net.ipv4.tcp_wmem "4096 16384 $apac_buffer"
+    apply_safe_tcp_mem
     sysctl_apply_verify net.ipv4.tcp_slow_start_after_idle "0"
     sysctl_apply_verify net.ipv4.tcp_limit_output_bytes "$output_bytes"
+    sysctl_apply_verify net.ipv4.tcp_window_scaling "1"
+    sysctl_apply_verify net.ipv4.tcp_mtu_probing "1"
+    sysctl_apply_verify net.ipv4.tcp_notsent_lowat "16384"
 
     # 2. 持久化写入（只替换 tune 段）
     replace_sysctl_section "tune" <<EOF
 # bbr-v3-pro: APAC Low-Latency Tuning
 net.core.rmem_max = $apac_buffer
 net.core.wmem_max = $apac_buffer
+net.core.netdev_max_backlog = $TARGET_BACKLOG
+$(emit_guarded_tune_lines)
 net.ipv4.tcp_rmem = 4096 131072 $apac_buffer
 net.ipv4.tcp_wmem = 4096 16384 $apac_buffer
 net.ipv4.tcp_slow_start_after_idle = 0
 net.ipv4.tcp_limit_output_bytes = $output_bytes
+net.ipv4.tcp_window_scaling = 1
+net.ipv4.tcp_mtu_probing = 1
+net.ipv4.tcp_notsent_lowat = 16384
 EOF
 
     $SUDO sysctl --system >/dev/null 2>&1
@@ -1171,22 +1195,24 @@ check_port_conflicts() {
     echo -e "  - Caddy 反代: 监听 TCP 80/443 (若开启 HTTP/3 独占 UDP 443)"
     echo -e "  - Hysteria 2: 监听 8443 + 端口跳跃 (避开 UDP 443，互不冲突)"
     echo ""
-    read -r -p "是否需要自定义查询特定端口？(输入端口号，回车跳过): " custom_p
-    custom_p=$(echo "$custom_p" | tr -d '[:space:]')
-    if [[ "$custom_p" =~ ^[0-9]+$ ]] && (( custom_p >= 1 && custom_p <= 65535 )); then
-        echo -e "\n${BOLD}正在查询自定义端口 $custom_p...${PLAIN}"
-        local tcp_raw udp_raw
-        tcp_raw=$(ss -tlpn "sport = :$custom_p" 2>/dev/null | grep -E ":$custom_p\b" || true)
-        udp_raw=$(ss -ulpn "sport = :$custom_p" 2>/dev/null | grep -E ":$custom_p\b" || true)
-        if [ -n "$tcp_raw" ]; then
-            echo -e "  TCP 状态: ${RED}已占用${PLAIN} 进程: $(echo "$tcp_raw" | awk '{print $NF}')"
-        else
-            echo -e "  TCP 状态: ${GREEN}空闲${PLAIN}"
-        fi
-        if [ -n "$udp_raw" ]; then
-            echo -e "  UDP 状态: ${RED}已占用${PLAIN} 进程: $(echo "$udp_raw" | awk '{print $NF}')"
-        else
-            echo -e "  UDP 状态: ${GREEN}空闲${PLAIN}"
+    if [[ -t 0 && "${ASSUME_YES:-0}" != "1" ]]; then
+        read -r -p "是否需要自定义查询特定端口？(输入端口号，回车跳过): " custom_p
+        custom_p=$(echo "$custom_p" | tr -d '[:space:]')
+        if [[ "$custom_p" =~ ^[0-9]+$ ]] && (( custom_p >= 1 && custom_p <= 65535 )); then
+            echo -e "\n${BOLD}正在查询自定义端口 $custom_p...${PLAIN}"
+            local tcp_raw udp_raw
+            tcp_raw=$(ss -tlpn "sport = :$custom_p" 2>/dev/null | grep -E ":$custom_p\b" || true)
+            udp_raw=$(ss -ulpn "sport = :$custom_p" 2>/dev/null | grep -E ":$custom_p\b" || true)
+            if [ -n "$tcp_raw" ]; then
+                echo -e "  TCP 状态: ${RED}已占用${PLAIN} 进程: $(echo "$tcp_raw" | awk '{print $NF}')"
+            else
+                echo -e "  TCP 状态: ${GREEN}空闲${PLAIN}"
+            fi
+            if [ -n "$udp_raw" ]; then
+                echo -e "  UDP 状态: ${RED}已占用${PLAIN} 进程: $(echo "$udp_raw" | awk '{print $NF}')"
+            else
+                echo -e "  UDP 状态: ${GREEN}空闲${PLAIN}"
+            fi
         fi
     fi
 }
@@ -1297,7 +1323,78 @@ check_bbr_status() {
 }
 
 # ==============================================================================
-#  原子化安全内核安装逻辑 (防砖架构)
+#  安全可逆 IPv6 开关（含当前 SSH 会话防失联检测与状态快照备份）
+# ==============================================================================
+has_active_ipv6_ssh_session() {
+    if [[ "${SSH_CONNECTION:-}" == *:* ]]; then
+        return 0
+    fi
+    if command -v ss >/dev/null 2>&1; then
+        if ss -tnH state established '( sport = :22 )' 2>/dev/null | awk '{print $3, $4}' | grep -q '\['; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+disable_ipv6() {
+    if has_active_ipv6_ssh_session; then
+        log_error "检测到当前存在活跃的 IPv6 SSH 会话，禁用 IPv6 将导致当前远程连接立即中断失联，已拒绝执行。"
+        return 1
+    fi
+
+    local all_val def_val lo_val
+    all_val="$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null || echo 0)"
+    def_val="$(sysctl -n net.ipv6.conf.default.disable_ipv6 2>/dev/null || echo 0)"
+    lo_val="$(sysctl -n net.ipv6.conf.lo.disable_ipv6 2>/dev/null || echo 0)"
+
+    $SUDO mkdir -p "$(dirname "$IPV6_BACKUP_STATE")" 2>/dev/null || true
+    if [[ ! -f "$IPV6_BACKUP_STATE" ]]; then
+        cat <<EOF | $SUDO tee "$IPV6_BACKUP_STATE" >/dev/null
+net.ipv6.conf.all.disable_ipv6=$all_val
+net.ipv6.conf.default.disable_ipv6=$def_val
+net.ipv6.conf.lo.disable_ipv6=$lo_val
+EOF
+    fi
+
+    cat <<'EOF' | $SUDO tee "$IPV6_SYSCTL_CONF" >/dev/null
+# Managed by bbr-v3-pro: disable IPv6
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+EOF
+
+    sysctl_reset_counters
+    sysctl_apply_verify net.ipv6.conf.all.disable_ipv6 1
+    sysctl_apply_verify net.ipv6.conf.default.disable_ipv6 1
+    sysctl_apply_verify net.ipv6.conf.lo.disable_ipv6 1
+    log_success "IPv6 已安全禁用并持久化至: $IPV6_SYSCTL_CONF（原状态已备份至 $IPV6_BACKUP_STATE）"
+    return 0
+}
+
+restore_ipv6() {
+    local all_val=0 def_val=0 lo_val=0
+    if [[ -r "$IPV6_BACKUP_STATE" ]]; then
+        all_val="$(awk -F= '/^net\.ipv6\.conf\.all\.disable_ipv6=/ {print $2; exit}' "$IPV6_BACKUP_STATE" 2>/dev/null || echo 0)"
+        def_val="$(awk -F= '/^net\.ipv6\.conf\.default\.disable_ipv6=/ {print $2; exit}' "$IPV6_BACKUP_STATE" 2>/dev/null || echo 0)"
+        lo_val="$(awk -F= '/^net\.ipv6\.conf\.lo\.disable_ipv6=/ {print $2; exit}' "$IPV6_BACKUP_STATE" 2>/dev/null || echo 0)"
+    fi
+    [[ "$all_val" =~ ^[01]$ ]] || all_val=0
+    [[ "$def_val" =~ ^[01]$ ]] || def_val=0
+    [[ "$lo_val" =~ ^[01]$ ]] || lo_val=0
+
+    $SUDO rm -f "$IPV6_SYSCTL_CONF" "$IPV6_BACKUP_STATE" 2>/dev/null || true
+    sysctl_reset_counters
+    sysctl_apply_verify net.ipv6.conf.all.disable_ipv6 "$all_val"
+    sysctl_apply_verify net.ipv6.conf.default.disable_ipv6 "$def_val"
+    sysctl_apply_verify net.ipv6.conf.lo.disable_ipv6 "$lo_val"
+    $SUDO sysctl --system >/dev/null 2>&1 || true
+    log_success "IPv6 状态已恢复（disable_ipv6: all=${all_val}, default=${def_val}, lo=${lo_val}）。"
+    return 0
+}
+
+# ==============================================================================
+#  原子化安全内核安装逻辑 (防砖架构 + 吸收自 Actions-bbr-v3 的多重校验)
 # ==============================================================================
 version_ge() {
     local current="$1"
@@ -1321,6 +1418,7 @@ assert_supported_kernel_install_system() {
         return 1
     fi
     local os_id="" os_version="" os_codename="" os_name="" min_version="" distro_name=""
+    # shellcheck disable=SC1091
     . /etc/os-release
     os_id="${ID:-}"
     os_version="${VERSION_ID:-}"
@@ -1361,6 +1459,199 @@ gh_api_get() {
     else
         curl -fsSL "$url"
     fi
+}
+
+check_release_api_response() {
+    local response="${1:-}"
+    local repo="${2:-$GITHUB_REPO}"
+    if [[ -z "$response" ]]; then
+        log_error "访问 GitHub Releases API 失败（返回为空），请检查网络或代理设置。"
+        return 1
+    fi
+    local api_msg
+    api_msg="$(echo "$response" | jq -r 'if type=="object" and has("message") then .message else "" end' 2>/dev/null || true)"
+    if [[ -n "$api_msg" ]]; then
+        log_error "GitHub API 返回错误 ($repo): $api_msg"
+        if [[ "$api_msg" == *"rate limit"* ]]; then
+            log_info "提示: 可通过 export GITHUB_TOKEN=你的令牌 避免匿名 API 限流。"
+        fi
+        return 1
+    fi
+    return 0
+}
+
+is_hyperv_system() {
+    if command -v systemd-detect-virt >/dev/null 2>&1; then
+        local virt
+        virt="$(systemd-detect-virt 2>/dev/null || true)"
+        [[ "$virt" == "microsoft" ]] && return 0
+    fi
+    if [[ -d /sys/bus/vmbus ]]; then
+        return 0
+    fi
+    local dmi_file
+    for dmi_file in /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/product_name /sys/class/dmi/id/ chassis_vendor; do
+        [[ -r "$dmi_file" ]] || continue
+        if grep -qiE 'Microsoft Corporation|Hyper-V|Virtual Machine' "$dmi_file" 2>/dev/null; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+assert_compatible_dkms() {
+    local target_tag="${1:-}"
+    # 仅在安装 7.x 主线内核且系统存在 DKMS 源码时做前置排雷
+    [[ "$target_tag" =~ -(7|[89])\. ]] || return 0
+    [[ -d /var/lib/dkms ]] || return 0
+
+    local dkms_conf pkg_name pkg_ver
+    for dkms_conf in /var/lib/dkms/*/*/source/dkms.conf; do
+        [[ -r "$dkms_conf" ]] || continue
+        pkg_name="$(awk -F= '/^PACKAGE_NAME=/ {gsub(/["'\'']/, "", $2); print $2; exit}' "$dkms_conf" 2>/dev/null || true)"
+        pkg_ver="$(awk -F= '/^PACKAGE_VERSION=/ {gsub(/["'\'']/, "", $2); print $2; exit}' "$dkms_conf" 2>/dev/null || true)"
+        if grep -Eq 'BUILD_EXCLUSIVE_KERNEL="\^([0-5]|6)\.' "$dkms_conf" 2>/dev/null; then
+            log_warn "检测到本地 DKMS 模块 ${pkg_name:-未知}/${pkg_ver:-未知} 限制了旧内核正则 ($dkms_conf)，在 7.x 内核下可能跳过编译。"
+        fi
+    done
+    return 0
+}
+
+extract_headers_config() {
+    local headers_deb="$1"
+    local out_cfg="$2"
+    local cfg_member
+    cfg_member="$(dpkg-deb --fsys-tarfile "$headers_deb" 2>/dev/null | tar -tf - 2>/dev/null | grep -E '^\./usr/src/linux-headers-[^/]+/\.config$' | head -n 1 || true)"
+    [[ -n "$cfg_member" ]] || return 1
+    dpkg-deb --fsys-tarfile "$headers_deb" 2>/dev/null | tar -xOf - "$cfg_member" > "$out_cfg" 2>/dev/null || return 1
+    [[ -s "$out_cfg" ]]
+}
+
+assert_cloud_kernel_config() {
+    local cfg_file="$1"
+    [[ -r "$cfg_file" ]] || return 0
+
+    if is_hyperv_system; then
+        local sym
+        for sym in CONFIG_HYPERV CONFIG_HYPERV_NET CONFIG_HYPERV_STORAGE; do
+            if ! grep -Eq "^${sym}=[ym]$" "$cfg_file" 2>/dev/null; then
+                log_error "当前运行于 Hyper-V / Azure 环境，但目标内核配置缺失关键驱动 ${sym}，已拒绝安装以防失联。"
+                return 1
+            fi
+        done
+    fi
+    return 0
+}
+
+validate_kernel_packages() {
+    local workdir="$1"
+    local -a image_debs=()
+    local -a header_debs=()
+    local deb
+
+    for deb in "$workdir"/linux-*.deb; do
+        [[ -f "$deb" ]] || continue
+        if ! dpkg-deb -I "$deb" >/dev/null 2>&1; then
+            log_error "安装包损坏或 dpkg 无法读取: $deb"
+            return 1
+        fi
+        case "$(basename "$deb")" in
+            linux-image-*) image_debs+=("$deb") ;;
+            linux-headers-*) header_debs+=("$deb") ;;
+        esac
+    done
+
+    if (( ${#image_debs[@]} != 1 )); then
+        log_error "安装包校验失败：期望恰好 1 个 linux-image-*.deb，实际找到 ${#image_debs[@]} 个。"
+        return 1
+    fi
+    if (( ${#header_debs[@]} != 1 )); then
+        log_error "安装包校验失败：期望恰好 1 个 linux-headers-*.deb，实际找到 ${#header_debs[@]} 个。"
+        return 1
+    fi
+
+    local img_ver hdr_ver
+    img_ver="$(dpkg-deb -f "${image_debs[0]}" Version 2>/dev/null || true)"
+    hdr_ver="$(dpkg-deb -f "${header_debs[0]}" Version 2>/dev/null || true)"
+    if [[ -z "$img_ver" || "$img_ver" != "$hdr_ver" ]]; then
+        log_error "linux-image (${img_ver:-未知}) 与 linux-headers (${hdr_ver:-未知}) 版本不一致，拒绝安装。"
+        return 1
+    fi
+
+    local extracted_cfg="$workdir/extracted.config"
+    if extract_headers_config "${header_debs[0]}" "$extracted_cfg"; then
+        assert_cloud_kernel_config "$extracted_cfg" || return 1
+    elif [[ -f "$workdir"/*.config ]]; then
+        local ext_cfg
+        for ext_cfg in "$workdir"/*.config; do
+            [[ -f "$ext_cfg" ]] && assert_cloud_kernel_config "$ext_cfg" || return 1
+        done
+    fi
+    return 0
+}
+
+backup_bootloader_state() {
+    $SUDO rm -rf "$BOOTLOADER_BACKUP_DIR" 2>/dev/null || true
+    $SUDO mkdir -p "$BOOTLOADER_BACKUP_DIR" 2>/dev/null || return 0
+    if [[ -f /boot/grub/grub.cfg ]]; then
+        $SUDO cp -a /boot/grub/grub.cfg "$BOOTLOADER_BACKUP_DIR/grub.cfg" 2>/dev/null || true
+    fi
+    if [[ -f /etc/default/grub ]]; then
+        $SUDO cp -a /etc/default/grub "$BOOTLOADER_BACKUP_DIR/default_grub" 2>/dev/null || true
+    fi
+    return 0
+}
+
+restore_bootloader_state() {
+    [[ -d "$BOOTLOADER_BACKUP_DIR" ]] || return 0
+    if [[ -f "$BOOTLOADER_BACKUP_DIR/default_grub" ]]; then
+        $SUDO cp -a "$BOOTLOADER_BACKUP_DIR/default_grub" /etc/default/grub 2>/dev/null || true
+    fi
+    if [[ -f "$BOOTLOADER_BACKUP_DIR/grub.cfg" ]]; then
+        $SUDO cp -a "$BOOTLOADER_BACKUP_DIR/grub.cfg" /boot/grub/grub.cfg 2>/dev/null || true
+    fi
+    if command -v update-grub &>/dev/null; then
+        $SUDO update-grub >/dev/null 2>&1 || true
+    fi
+    log_info "已自动回滚 GRUB 引导配置。"
+    return 0
+}
+
+assert_kernel_boot_ready() {
+    local krel="$1"
+    [[ -n "$krel" ]] || return 0
+
+    if [[ ! -f "/boot/vmlinuz-${krel}" ]]; then
+        log_error "安装后自检失败：未找到内核映像 /boot/vmlinuz-${krel}"
+        return 1
+    fi
+    if [[ ! -f "/boot/initrd.img-${krel}" ]]; then
+        log_error "安装后自检失败：未找到 initramfs 映像 /boot/initrd.img-${krel}"
+        return 1
+    fi
+    if [[ -f /boot/grub/grub.cfg ]] && ! grep -Fq "$krel" /boot/grub/grub.cfg 2>/dev/null; then
+        log_error "安装后自检失败：/boot/grub/grub.cfg 中未包含新内核 ${krel} 的引导项。"
+        return 1
+    fi
+
+    # Hyper-V / Azure 虚拟机额外检查：若 storvsc/netvsc 编译为模块 (=m)，必须已打入 initrd.img
+    if is_hyperv_system && command -v lsinitramfs >/dev/null 2>&1 && [[ -r "/boot/config-${krel}" ]]; then
+        local initrd_files
+        initrd_files="$(lsinitramfs "/boot/initrd.img-${krel}" 2>/dev/null || true)"
+        if grep -q '^CONFIG_HYPERV_STORAGE=m$' "/boot/config-${krel}" 2>/dev/null; then
+            if ! echo "$initrd_files" | grep -qE 'hv_storvsc\.ko'; then
+                log_error "Hyper-V 启动自检失败：/boot/initrd.img-${krel} 缺少 hv_storvsc 存储驱动模块！"
+                return 1
+            fi
+        fi
+        if grep -q '^CONFIG_HYPERV_NET=m$' "/boot/config-${krel}" 2>/dev/null; then
+            if ! echo "$initrd_files" | grep -qE 'hv_netvsc\.ko'; then
+                log_error "Hyper-V 启动自检失败：/boot/initrd.img-${krel} 缺少 hv_netvsc 网卡驱动模块！"
+                return 1
+            fi
+        fi
+    fi
+    return 0
 }
 
 # ==============================================================================
@@ -1423,22 +1714,27 @@ fetch_kernel_assets() {
     return 0
 }
 
-install_bbrv3_kernel() {
-    assert_supported_kernel_install_system || return 1
+select_release_tag_from_json() {
+    local release_data="$1"
+    local arch_filter="$2"
+    local req_ver="${3:-}"
 
-    local target_repo="${GITHUB_REPO}"
-    log_info "正在从 GitHub 获取 [$target_repo] 最新发布的内核版本..."
-
-    local base_url="https://api.github.com/repos/${target_repo}/releases"
-    local release_data
-    release_data=$(gh_api_get "$base_url" 2>/dev/null || true)
-
-    local arch_filter="x86_64"
-    [[ "$ARCH" == "aarch64" ]] && arch_filter="arm64"
-
-    local latest_tag=""
-    if [[ -n "$release_data" ]]; then
-        latest_tag=$(echo "$release_data" | jq -r --arg filter "$arch_filter" '
+    if [[ -n "$req_ver" ]]; then
+        local norm_ver="$req_ver"
+        [[ "$norm_ver" =~ ^[0-9]+\.[0-9]+$ ]] && norm_ver="${norm_ver}.0"
+        echo "$release_data" | jq -r --arg filter "$arch_filter" --arg v1 "$req_ver" --arg v2 "$norm_ver" '
+          if type=="array" then
+            map(
+              select(
+                .tag_name == ($filter + "-" + $v1) or .tag_name == ($filter + "-" + $v2)
+              )
+            )
+            | sort_by(.published_at)
+            | .[-1].tag_name // ""
+          else "" end
+        ' 2>/dev/null || true
+    else
+        echo "$release_data" | jq -r --arg filter "$arch_filter" '
           if type=="array" then
             map(
               select(.tag_name | test("^" + $filter + "-[0-9]"; "i"))
@@ -1447,15 +1743,44 @@ install_bbrv3_kernel() {
             | sort_by(.published_at)
             | .[-1].tag_name // ""
           else "" end
-        ' 2>/dev/null || true)
+        ' 2>/dev/null || true
+    fi
+}
+
+install_bbrv3_kernel() {
+    local requested_version="${1:-}"
+    requested_version="${requested_version#v}"
+    if [[ -n "$requested_version" ]] && ! [[ "$requested_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+        log_error "无效的内核版本号格式: $requested_version（示例: 6.12.5 或 6.12）"
+        return 1
+    fi
+
+    assert_supported_kernel_install_system || return 1
+
+    local target_repo="${GITHUB_REPO}"
+    if [[ -n "$requested_version" ]]; then
+        log_info "正在从 GitHub 获取 [$target_repo] 指定版本 ($requested_version) 的内核安装包..."
+    else
+        log_info "正在从 GitHub 获取 [$target_repo] 最新发布的内核版本..."
+    fi
+
+    local base_url="https://api.github.com/repos/${target_repo}/releases"
+    local release_data
+    release_data=$(gh_api_get "$base_url" 2>/dev/null || true)
+    check_release_api_response "$release_data" "$target_repo" || true
+
+    local arch_filter="x86_64"
+    [[ "$ARCH" == "aarch64" ]] && arch_filter="arm64"
+
+    local latest_tag=""
+    if [[ -n "$release_data" ]]; then
+        latest_tag="$(select_release_tag_from_json "$release_data" "$arch_filter" "$requested_version")"
     fi
 
     # 私有源无可用内核包时的处理。
-    # 注意：用户显式设置 BBR_REPO 的意图通常是"只使用自己编译的内核"，
-    # 因此默认只提示、不自动切换；需要在明确同意后才回退到上游中央源。
     if [[ -z "$latest_tag" || "$latest_tag" == "null" ]]; then
         if [[ "$target_repo" != "$UPSTREAM_REPO" ]]; then
-            log_warn "私有仓库 [$target_repo] 未发布适用于 [$ARCH] 的内核包。"
+            log_warn "私有仓库 [$target_repo] 未发布适用于 [$ARCH] 的匹配内核包。"
             if [[ "${BBR_ALLOW_UPSTREAM:-0}" != "1" ]]; then
                 log_info "你的配置意图是仅使用自有内核，因此脚本不会自动改用第三方源。"
                 log_info "如确实要安装上游中央源 [$UPSTREAM_REPO] 构建的内核，请显式执行其一："
@@ -1467,17 +1792,9 @@ install_bbrv3_kernel() {
             target_repo="$UPSTREAM_REPO"
             base_url="https://api.github.com/repos/${target_repo}/releases"
             release_data=$(gh_api_get "$base_url" 2>/dev/null || true)
+            check_release_api_response "$release_data" "$target_repo" || return 1
             if [[ -n "$release_data" ]]; then
-                latest_tag=$(echo "$release_data" | jq -r --arg filter "$arch_filter" '
-                  if type=="array" then
-                    map(
-                      select(.tag_name | test("^" + $filter + "-[0-9]"; "i"))
-                      | select((.tag_name | test("-max$"; "i")) | not)
-                    )
-                    | sort_by(.published_at)
-                    | .[-1].tag_name // ""
-                  else "" end
-                ' 2>/dev/null || true)
+                latest_tag="$(select_release_tag_from_json "$release_data" "$arch_filter" "$requested_version")"
             fi
         fi
     fi
@@ -1488,7 +1805,8 @@ install_bbrv3_kernel() {
         return 1
     fi
 
-    log_info "匹配到最新内核版本标签: ${GREEN}$latest_tag${PLAIN} (来源: $target_repo)"
+    log_info "匹配到内核版本标签: ${GREEN}$latest_tag${PLAIN} (来源: $target_repo)"
+    assert_compatible_dkms "$latest_tag" || return 1
 
     local asset_urls
     asset_urls=$(echo "$release_data" | jq -r --arg tag "$latest_tag" '
@@ -1508,39 +1826,39 @@ install_bbrv3_kernel() {
     local workdir="/tmp/bbr_kernel_install"
     rm -rf "$workdir" && mkdir -p "$workdir"
 
-    fetch_kernel_assets "$asset_urls" "$workdir" || return 1
+    fetch_kernel_assets "$asset_urls" "$workdir" || { rm -rf "$workdir"; return 1; }
 
-    # 验证 deb 包完整性（能否被 dpkg 读取）
-    local any_deb=0
-    for deb in "$workdir"/linux-*.deb; do
-        [[ -f "$deb" ]] || continue
-        any_deb=1
-        if ! dpkg-deb -I "$deb" >/dev/null 2>&1; then
-            log_error "安装包损坏或 dpkg 无法读取: $deb"
-            rm -rf "$workdir"
-            return 1
-        fi
-    done
-    if (( any_deb == 0 )); then
-        log_error "下载完成但未取得任何 linux-*.deb，已中止安装。"
+    # 严格验证 deb 包对完整性、版本一致性与云厂商 Hyper-V 驱动要求
+    if ! validate_kernel_packages "$workdir"; then
         rm -rf "$workdir"
         return 1
     fi
 
-    # 下载前置检查：若 deb 版本与已装内核完全相同，先征求确认，
-    # 避免白跑一遍 150MB 的解包 + initramfs + GRUB 生成。
-    local deb_ver cur_ver need_prompt=0
+    # 下载前置检查：若 deb 版本与已装内核完全相同，先征求确认
+    local deb_ver cur_ver img_pkg_name="" hdr_pkg_name="" target_krel="" need_prompt=0
     for deb in "$workdir"/linux-image-*.deb; do
         [[ -f "$deb" ]] || continue
+        img_pkg_name="$(dpkg-deb -f "$deb" Package 2>/dev/null || true)"
+        target_krel="${img_pkg_name#linux-image-}"
         deb_ver="$(dpkg-deb -f "$deb" Version 2>/dev/null || true)"
-        cur_ver="$(dpkg-query -W -f='${Version}' "$(dpkg-deb -f "$deb" Package 2>/dev/null)" 2>/dev/null || true)"
+        cur_ver="$(dpkg-query -W -f='${Version}' "$img_pkg_name" 2>/dev/null || true)"
         if [[ -n "$deb_ver" && "$deb_ver" == "$cur_ver" ]]; then
             log_info "当前内核版本 (${cur_ver}) 与要安装的版本相同，无需升级。"
             need_prompt=1
         fi
     done
+    for deb in "$workdir"/linux-headers-*.deb; do
+        [[ -f "$deb" ]] || continue
+        hdr_pkg_name="$(dpkg-deb -f "$deb" Package 2>/dev/null || true)"
+    done
+
     if (( need_prompt )); then
-        read -r -p "是否仍要重新安装同版本内核？(y/N): " reinstall_same
+        local reinstall_same="n"
+        if [[ "${ASSUME_YES:-0}" == "1" ]]; then
+            reinstall_same="y"
+        elif [[ -t 0 ]]; then
+            read -r -p "是否仍要重新安装同版本内核？(y/N): " reinstall_same
+        fi
         if [[ "$reinstall_same" != "y" && "$reinstall_same" != "Y" ]]; then
             log_info "已取消，未做任何改动。"
             rm -rf "$workdir"
@@ -1549,13 +1867,9 @@ install_bbrv3_kernel() {
         log_warn "将重新安装同版本内核（不会升级到更新的版本）。"
     fi
 
-    log_info "正在安全安装新内核 (保留旧内核作为救援保底)..."
-    # 判据说明（教训）：
-    # 只比对 /boot/vmlinuz-* 的【文件名列表】是错的 —— 同版本重装时文件名不变，
-    # 会被误判为"dpkg 未替换内核"，而实际上 dpkg 可能确实完成了重装。
-    # 因此：
-    #   - 主判据 = dpkg 自己的退出码（失败才说明真的没装上）
-    #   - 辅助判据 = 内核映像的 mtime 签名，用于区分"真的重装了"与"确实什么都没做"
+    log_info "正在备份当前 GRUB 引导状态并安全安装新内核 (保留旧内核作为救援保底)..."
+    backup_bootloader_state
+
     local before_sig after_sig
     kernel_sig() {
         ls -l --time-style=+%s /boot/vmlinuz-* 2>/dev/null \
@@ -1570,14 +1884,14 @@ install_bbrv3_kernel() {
         after_sig="$(kernel_sig)"
         log_warn "dpkg -i 返回非零，但 apt-get install -f 修复依赖成功，已继续。"
     else
-        log_error "内核安装失败！系统原有内核完整保留未受破坏，请勿重启并检查报错日志。"
+        log_error "内核安装失败！正在清理半安装状态并恢复原有引导配置..."
+        [[ -n "$img_pkg_name" ]] && $SUDO apt-get purge -y "$img_pkg_name" ${hdr_pkg_name:+"$hdr_pkg_name"} >/dev/null 2>&1 || true
+        restore_bootloader_state
         rm -rf "$workdir"
         return 1
     fi
 
     if [[ -n "$before_sig" && "$before_sig" == "$after_sig" ]]; then
-        # dpkg 成功但内核映像没变化：说明装的是与已装版本完全相同的包，
-        # /boot 内容被原样重写。这不是失败，但用户需要知道"没有换到新内核"。
         log_warn "内核映像未发生变化：本次安装的版本与已装版本相同（同版本重装）。"
         log_warn "若期望升级到更新的内核，请确认 Release 中的 deb 版本号已递增"
         log_warn "（构建侧需设置 KDEB_PKGVERSION），或等待下一个内核版本的 Release。"
@@ -1587,16 +1901,26 @@ install_bbrv3_kernel() {
     if command -v update-grub &>/dev/null; then
         $SUDO update-grub
     fi
-    if command -v update-grub &>/dev/null; then
-        local newest_kernel
-        newest_kernel=$(ls -1 /boot/vmlinuz-* 2>/dev/null | sort -V | tail -n 1 | sed 's|.*/vmlinuz-||')
-        if [[ -n "$newest_kernel" ]] && ! grep -q "$newest_kernel" /boot/grub/grub.cfg 2>/dev/null; then
-            log_warn "GRUB 配置中未找到内核 $newest_kernel 的引导项，重启后可能仍进入旧内核。"
-            log_warn "请人工检查 /boot/grub/grub.cfg 与 update-grub 输出后再重启。"
-        fi
+
+    if ! assert_kernel_boot_ready "$target_krel"; then
+        log_error "新内核 ($target_krel) 启动完备性自检未通过，正在自动回滚卸载问题内核并恢复引导..."
+        [[ -n "$img_pkg_name" ]] && $SUDO apt-get purge -y "$img_pkg_name" ${hdr_pkg_name:+"$hdr_pkg_name"} >/dev/null 2>&1 || true
+        restore_bootloader_state
+        rm -rf "$workdir"
+        return 1
     fi
-    log_success "内核安装与引导更新流程完成。"
+
+    log_success "内核安装与引导完备性自检全部通过。"
     rm -rf "$workdir"
+
+    if [[ "${NO_REBOOT:-0}" == "1" ]]; then
+        log_warn "已指定 --no-reboot，跳过重启；请稍后手动执行 reboot 生效。"
+        return 0
+    fi
+    if [[ "${ASSUME_YES:-0}" == "1" || ! -t 0 ]]; then
+        log_warn "无人值守/非交互模式默认不自动立刻重启；请稍后手动执行 reboot 生效。"
+        return 0
+    fi
 
     read -r -p "新内核需要重启系统才能生效，是否立即重启？(y/n): " do_reboot
     if [[ "$do_reboot" == "y" || "$do_reboot" == "Y" ]]; then
@@ -1612,18 +1936,23 @@ install_bbrv3_kernel() {
 # ==============================================================================
 uninstall_bbrv3_kernel() {
     log_info "正在检测系统中已安装的 BBRv3 内核包..."
-    
-    local packages_to_remove
-    packages_to_remove=$(dpkg -l 2>/dev/null | awk '/^ii/ && $2 ~ /^linux-(image|headers)-/ && ($2 ~ /bbrv3/ || $2 ~ /joeyblog/) {print $2}' | tr '\n' ' ')
 
-    if [[ -z "$packages_to_remove" ]]; then
+    local -a pkgs_arr=()
+    local pkg
+    while IFS= read -r pkg; do
+        [[ -n "$pkg" ]] && pkgs_arr+=("$pkg")
+    done < <(dpkg -l 2>/dev/null | awk '/^[ih]i/ && $2 ~ /^linux-(image|headers)-/ && ($2 ~ /bbrv3/ || $2 ~ /joeyblog/) {print $2}')
+
+    local packages_to_remove="${pkgs_arr[*]:-}"
+
+    if (( ${#pkgs_arr[@]} == 0 )); then
         log_warn "未在当前系统中检测到已安装的自建 BBRv3 内核包。"
         return 0
     fi
 
-    # 安全断言：检查系统内是否保留官方/通用兜底内核
+    # 安全断言：检查系统内是否保留官方/通用兜底内核（兼容 ii 正常安装与 hi 锁定 hold 状态）
     local fallback_kernels
-    fallback_kernels=$(dpkg -l 2>/dev/null | awk '/^ii/ && $2 ~ /^linux-image-(unsigned-)?[0-9]/ && ($2 !~ /bbrv3/ && $2 !~ /joeyblog/) {print $2}' | tr '\n' ' ')
+    fallback_kernels=$(dpkg -l 2>/dev/null | awk '/^[ih]i/ && $2 ~ /^linux-image-(unsigned-)?[0-9]/ && ($2 !~ /bbrv3/ && $2 !~ /joeyblog/) {print $2}' | tr '\n' ' ')
 
     if [[ -z "$fallback_kernels" ]]; then
         log_error "【高危拦截】系统未检测到任何官方备用内核！"
@@ -1634,19 +1963,29 @@ uninstall_bbrv3_kernel() {
 
     echo -e "即将卸载以下 BBRv3 内核包: ${YELLOW}$packages_to_remove${PLAIN}"
     echo -e "系统将安全回滚至备用官方内核: ${GREEN}$fallback_kernels${PLAIN}"
-    read -r -p "确认卸载并回滚引导吗？(y/n): " confirm_un
-    if [[ "$confirm_un" != "y" && "$confirm_un" != "Y" ]]; then
-        log_info "操作已取消。"
-        return 0
+    if [[ "${ASSUME_YES:-0}" != "1" ]]; then
+        if [[ ! -t 0 ]]; then
+            log_error "非交互模式下卸载内核需显式传入 --yes 确认。"
+            return 1
+        fi
+        read -r -p "确认卸载并回滚引导吗？(y/n): " confirm_un
+        if [[ "$confirm_un" != "y" && "$confirm_un" != "Y" ]]; then
+            log_info "操作已取消。"
+            return 0
+        fi
     fi
 
     log_info "正在安全卸载 BBRv3 内核包..."
-    if $SUDO apt-get purge -y $packages_to_remove; then
+    if $SUDO apt-get purge -y "${pkgs_arr[@]}"; then
         log_info "正在更新 GRUB 引导记录..."
         if command -v update-grub &>/dev/null; then
             $SUDO update-grub
         fi
         log_success "BBRv3 内核已成功卸载，GRUB 引导已恢复官方内核！"
+        if [[ "${NO_REBOOT:-0}" == "1" || "${ASSUME_YES:-0}" == "1" || ! -t 0 ]]; then
+            log_warn "请稍后手动执行 reboot 重启生效。"
+            return 0
+        fi
         read -r -p "需要重启系统以加载官方内核，是否立即重启？(y/n): " do_rb
         if [[ "$do_rb" == "y" || "$do_rb" == "Y" ]]; then
             log_info "系统正在重启..."
@@ -1670,15 +2009,22 @@ uninstall_everything() {
     echo -e "  2. 移除系统快捷唤醒指令 ($QUICK_COMMAND_PATH)"
     echo -e "  3. 删除临时下载目录与残留安全配置"
     echo -e "--------------------------------------------------------"
-    read -r -p "确认彻底卸载本工具及所有网络配置吗？(y/n): " confirm_all
-    if [[ "$confirm_all" != "y" && "$confirm_all" != "Y" ]]; then
-        log_info "操作已取消。"
-        return 0
+    if [[ "${ASSUME_YES:-0}" != "1" ]]; then
+        if [[ ! -t 0 ]]; then
+            log_error "非交互模式下彻底卸载需显式传入 --yes 确认。"
+            return 1
+        fi
+        read -r -p "确认彻底卸载本工具及所有网络配置吗？(y/n): " confirm_all
+        if [[ "$confirm_all" != "y" && "$confirm_all" != "Y" ]]; then
+            log_info "操作已取消。"
+            return 0
+        fi
     fi
 
     clear_network_tuning
-    $SUDO rm -f "$QUICK_COMMAND_PATH" "$SECURITY_MODPROBE_CONF"
-    $SUDO rm -rf /tmp/bbr_kernel_install
+    restore_ipv6 >/dev/null 2>&1 || true
+    $SUDO rm -f "$QUICK_COMMAND_PATH" "$SECURITY_MODPROBE_CONF" "$IPV6_SYSCTL_CONF"
+    $SUDO rm -rf /tmp/bbr_kernel_install /var/lib/bbr-v3-pro
     log_success "bbr-v3-pro 工具与所有调优配置已彻底卸载完毕，系统已恢复纯净状态。"
     exit 0
 }
@@ -1711,11 +2057,13 @@ show_menu() {
         echo -e "  ${BOLD}10.${PLAIN} 卸载自建 BBRv3 内核 (安全回滚至官方原厂内核)"
         echo -e "  ${BOLD}11.${PLAIN} 彻底卸载 bbr-v3-pro (清理快捷命令及所有残留)"
         echo -e "  ${BOLD}12.${PLAIN} 更新 bbr-v3-pro 到最新版"
+        echo -e "  ${BOLD}13.${PLAIN} 安全禁用 IPv6 (含 SSH 防失联检测与可逆备份)"
+        echo -e "  ${BOLD}14.${PLAIN} 恢复 IPv6 默认状态"
         echo -e "  ${BOLD}0.${PLAIN} 退出管理系统"
         echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${PLAIN}"
         echo -e "快捷唤醒指令: ${GREEN}bbr${PLAIN}"
         echo -e "----------------------------------------------------------------"
-        read -r -p "请输入功能编号 [0-12]: " opt
+        read -r -p "请输入功能编号 [0-14]: " opt
         opt="${opt//[[:space:]]/}"
 
         case "$opt" in
@@ -1731,8 +2079,10 @@ show_menu() {
             10) uninstall_bbrv3_kernel ;;
             11) uninstall_everything ;;
             12) self_update 0 ;;
+            13) disable_ipv6 ;;
+            14) restore_ipv6 ;;
             0) exit 0 ;;
-            *) log_error "输入无效，请输入 [0-12]！" ;;
+            *) log_error "输入无效，请输入 [0-14]！" ;;
         esac
 
         echo ""
@@ -1741,27 +2091,97 @@ show_menu() {
 }
 
 # ==============================================================================
-#  主入口: CLI 自动化参数解析与调度
-# ==============================================================================
-#  主入口
+#  主入口: CLI 自动化参数预校验、依赖就绪与调度
 #
 #  顺序很重要：
-#   - check_and_install_deps 两种模式都需要（CLI 的 --install-kernel 依赖 jq 等）
-#   - ensure_quick_command / apply_security_mitigations 只在【交互模式】执行，
-#     否则会出现自相矛盾的行为 —— 例如 --uninstall-all 要删除快捷命令，
-#     却在参数分发之前先被 ensure_quick_command 重新装回来。
+#   - 先解析并验证 CLI 参数合法性，未知参数直接报错退出，不触发无谓的 apt-get update
+#   - 再运行 check_and_install_deps 确保运行环境工具齐备
+#   - ensure_quick_command / apply_security_mitigations 只在【交互模式】执行
 # ==============================================================================
+PRIMARY_ACTION=""
+TARGET_KERNEL_VER=""
+
+for arg in "$@"; do
+    case "$arg" in
+        --yes|-y)
+            ASSUME_YES=1
+            ;;
+        --no-reboot)
+            NO_REBOOT=1
+            ;;
+        --bw=*)
+            CLI_BW="${arg#--bw=}"
+            ;;
+        --rtt=*)
+            CLI_RTT="${arg#--rtt=}"
+            ;;
+        --status|--install-kernel|--apply-bbr|--tune=ai-gateway|--apply-ai|--tune=smart|--tune=apac|--clean|--mitigate-cve|--check-ports|--uninstall-kernel|--uninstall-all|--disable-ipv6|--restore-ipv6|--help|-h)
+            PRIMARY_ACTION="$arg"
+            ;;
+        --install-kernel=*)
+            TARGET_KERNEL_VER="${arg#--install-kernel=}"
+            TARGET_KERNEL_VER="${TARGET_KERNEL_VER#v}"
+            if [[ -z "$TARGET_KERNEL_VER" ]] || ! [[ "$TARGET_KERNEL_VER" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+                log_error "未知或无效的内核版本参数: $arg"
+                log_info "完整参数列表: $0 --help"
+                exit 1
+            fi
+            PRIMARY_ACTION="--install-kernel"
+            ;;
+        *)
+            PRIMARY_ACTION="$arg"
+            break
+            ;;
+    esac
+done
+
+if [[ -n "$PRIMARY_ACTION" ]]; then
+    case "$PRIMARY_ACTION" in
+        --status|--install-kernel|--apply-bbr|--tune=ai-gateway|--apply-ai|--tune=smart|--tune=apac|--clean|--mitigate-cve|--check-ports|--uninstall-kernel|--uninstall-all|--disable-ipv6|--restore-ipv6|--help|-h)
+            ;;
+        *)
+            log_error "未知参数: $PRIMARY_ACTION"
+            # 常见拼写错误纠错：单横杠、缺横杠、大小写等
+            _arg_suggest=""
+            case "$PRIMARY_ACTION" in
+                -update|-Update|-UPDATE)            _arg_suggest="--update" ;;
+                update|Update)                      _arg_suggest="--update" ;;
+                -version|-v|-V)                     _arg_suggest="--version" ;;
+                version)                            _arg_suggest="--version" ;;
+                --updata|--updte|--updat)          _arg_suggest="--update" ;;
+                -help|-h)                           _arg_suggest="--help" ;;
+                help)                               _arg_suggest="--help" ;;
+                -status)                            _arg_suggest="--status" ;;
+                status)                             _arg_suggest="--status" ;;
+                -install-kernel|install-kernel)     _arg_suggest="--install-kernel" ;;
+                -apply-bbr|apply-bbr)               _arg_suggest="--apply-bbr" ;;
+                -clean|clean)                       _arg_suggest="--clean" ;;
+                -mitigate-cve|mitigate-cve|--mitigate) _arg_suggest="--mitigate-cve" ;;
+                -check-ports|check-ports)           _arg_suggest="--check-ports" ;;
+                -uninstall-kernel|uninstall-kernel) _arg_suggest="--uninstall-kernel" ;;
+                -uninstall-all|uninstall-all)       _arg_suggest="--uninstall-all" ;;
+                -tune=*|tune=*)                     _arg_suggest="--${PRIMARY_ACTION#-}" ;;
+            esac
+            if [[ -n "$_arg_suggest" ]]; then
+                log_info "是否想输入: ${GREEN}${_arg_suggest}${PLAIN} ？"
+            fi
+            log_info "完整参数列表: $0 --help"
+            exit 1
+            ;;
+    esac
+fi
+
 check_and_install_deps
 
-if [[ $# -gt 0 ]]; then
-    case "$1" in
+if [[ -n "$PRIMARY_ACTION" ]]; then
+    case "$PRIMARY_ACTION" in
         --status)
             check_bbr_status
             exit 0
             ;;
         --install-kernel)
-            install_bbrv3_kernel
-            exit 0
+            install_bbrv3_kernel "$TARGET_KERNEL_VER"
+            exit $?
             ;;
         --apply-bbr)
             apply_bbr_and_qdisc "bbr" "fq"
@@ -1779,6 +2199,14 @@ if [[ $# -gt 0 ]]; then
             apply_apac_tuning
             exit 0
             ;;
+        --disable-ipv6)
+            disable_ipv6
+            exit $?
+            ;;
+        --restore-ipv6)
+            restore_ipv6
+            exit $?
+            ;;
         --clean)
             clear_network_tuning
             exit 0
@@ -1793,7 +2221,7 @@ if [[ $# -gt 0 ]]; then
             ;;
         --uninstall-kernel)
             uninstall_bbrv3_kernel
-            exit 0
+            exit $?
             ;;
         --uninstall-all)
             uninstall_everything
@@ -1802,35 +2230,6 @@ if [[ $# -gt 0 ]]; then
         --help|-h)
             show_help
             exit 0
-            ;;
-        *)
-            log_error "未知参数: $1"
-            # 常见拼写错误纠错：单横杠、缺横杠、大小写等
-            _arg_suggest=""
-            case "$1" in
-                -update|-Update|-UPDATE)            _arg_suggest="--update" ;;
-                update|Update)                      _arg_suggest="--update" ;;
-                -version|-v|-V)                     _arg_suggest="--version" ;;
-                version)                            _arg_suggest="--version" ;;
-                --updata|--updte|--updat)          _arg_suggest="--update" ;;
-                -help|-h)                           _arg_suggest="--help" ;;
-                help)                               _arg_suggest="--help" ;;
-                -status)                            _arg_suggest="--status" ;;
-                status)                             _arg_suggest="--status" ;;
-                -install-kernel|install-kernel)     _arg_suggest="--install-kernel" ;;
-                -apply-bbr|apply-bbr)               _arg_suggest="--apply-bbr" ;;
-                -clean|clean)                       _arg_suggest="--clean" ;;
-                -mitigate-cve|mitigate-cve|--mitigate) _arg_suggest="--mitigate-cve" ;;
-                -check-ports|check-ports)           _arg_suggest="--check-ports" ;;
-                -uninstall-kernel|uninstall-kernel) _arg_suggest="--uninstall-kernel" ;;
-                -uninstall-all|uninstall-all)       _arg_suggest="--uninstall-all" ;;
-                -tune=*|tune=*)                     _arg_suggest="--${1#-}" ;;
-            esac
-            if [[ -n "$_arg_suggest" ]]; then
-                log_info "是否想输入: ${GREEN}${_arg_suggest}${PLAIN} ？"
-            fi
-            log_info "完整参数列表: $0 --help"
-            exit 1
             ;;
     esac
 fi

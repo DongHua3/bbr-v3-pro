@@ -8,6 +8,9 @@ on:
       - 'tests/**'
       - '.github/workflows/**'
       - '*.config'
+      - 'cve_2026_31431_detector.py'
+      - 'patches/**'
+      - '.gitattributes'
   pull_request:
     paths:
       - 'install.sh'
@@ -15,6 +18,9 @@ on:
       - 'tests/**'
       - '.github/workflows/**'
       - '*.config'
+      - 'cve_2026_31431_detector.py'
+      - 'patches/**'
+      - '.gitattributes'
   workflow_dispatch:
 
 jobs:
@@ -37,16 +43,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y shellcheck
 
-      - name: shellcheck（先以 error 级为门禁）
+      - name: shellcheck（warning 级门禁）
         run: |
-          # 首次接入先用 -S error 挡住真正会出错的问题；
-          # 待 warning 级问题清理完再收紧到 -S warning。
-          shellcheck -S error install.sh scripts/*.sh
-
-      - name: shellcheck（warning 级，仅报告不阻断）
-        continue-on-error: true
-        run: |
-          shellcheck -S warning install.sh scripts/*.sh || true
+          shellcheck -S warning install.sh scripts/*.sh
 
   unit:
     # 测试套件此前没有任何 CI 门禁：断言与 workflow 实现漂移后只会一直红着，
