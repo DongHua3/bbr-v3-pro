@@ -4,6 +4,8 @@ Linux 服务器网络调优与 BBRv3 主线内核自动化管理系统。一条�
 
 - 支持 Debian 12+ / Ubuntu 22.04+ / Ubuntu 24.04+，x86_64 与 arm64
 - 虚拟化兼容 KVM（VirtIO）、Hyper-V / Azure（VMBus）、Xen、VMware 与裸金属
+- 针对云服务器精简内核：剥离桌面重型 GPU、声卡、摄像头、蓝牙、WiFi 等冗余驱动，完整保留 `linux-headers` 内 `.config` 以兼容 DKMS
+- 全链路防变砖保护：DKMS 兼容性预检、云虚拟化配置门禁、GRUB 引导状态备份、Hyper-V `initramfs` 模块核验与失败自动回滚
 - 交互菜单与命令行参数双模式，可对接 Ansible / cloud-init 批量下发
 - 无广告、无推广外链、无 Emoji
 
@@ -15,6 +17,7 @@ Linux 服务器网络调优与 BBRv3 主线内核自动化管理系统。一条�
 - [快速开始](#快速开始)
 - [命令速查](#命令速查)
 - [交互菜单](#交互菜单)
+- [内核瘦身与防变砖机制](#内核瘦身与防变砖机制)
 - [调优预设怎么选](#调优预设怎么选)
 - [参数与内存策略](#参数与内存策略)
 - [内核安全与 CVE 探测](#内核安全与-cve-探测)
@@ -40,7 +43,9 @@ Linux 默认的网络参数是为通用场景调的，在高延迟链路、大�
 | 下载一开，SSH 就卡 | 缓冲区膨胀（Bufferbloat） | 换用 fq / cake 队列算法过滤抖动 |
 | 小内存机器晚高峰重启 | 缓冲区放大过度吃光内存，触发 OOM | 内存安全引擎按物理内存动态钳位 `tcp_mem` |
 | 装完不知道有没有生效 | 传统脚本写入失败时静默吞掉报错 | 写入后逐项回读校验并断言 |
-| 换核重启后黑屏死机 | 自定义内核缺失云平台底层驱动 | 开启 12 项 Hyper-V / Azure 驱动矩阵，对齐官方基线 |
+| 换核重启后黑屏死机 | 自定义内核缺失云平台底层驱动或 `initramfs` 损坏 | 开启 12 项 Hyper-V / Azure 驱动矩阵，安装后核验 `vmlinuz`/`initrd.img`/`grub.cfg`，失败自动回滚引导 |
+| 装完自建内核 DKMS 报错 | 主线 `bindeb-pkg` 默认剔除 `linux-headers` 里的 `.config` | 打包期注入完整 `.config`，保障 WireGuard / ZFS 等第三方模块正常编译 |
+| 通用内核包臃肿占空间 | 默认开启大量桌面显卡、声卡与无线外设模块 | 编译期裁剪 `amdgpu`/`i915`/`nouveau`、ALSA 声卡、V4L2 摄像头、蓝牙与 WiFi 驱动 |
 
 **BBRv3 是什么**：Google BBR 拥塞控制算法的第三代实现。它不靠丢包判断拥塞，而是主动测量带宽和延迟来调速，在高丢包的长链路上通常明显优于默认的 Cubic。本项目把 BBRv3 补丁打进主线内核，编译成可直接安装的 `.deb`。
 
@@ -166,7 +171,7 @@ UDP 套接字缓冲 : 16 MB (AI/Hy2 专属大水管)
 
 ## 交互菜单
 
-输入 `bbr` 打开主菜单，共 13 项，输入编号执行：
+输入 `bbr` 打开主菜单，共 14 项，输入编号执行：
 
 | 编号 | 功能 | 说明 |
 |---|---|---|
@@ -218,6 +223,33 @@ bbr --update --force
 **支持范围。** `patches/` 当前有 7.0 / 7.1 / 7.2 / 7.3 四条，只覆盖 BBRv3 补丁能对齐的版本。上游 stable 换了大版本、对应补丁还没跟上时，构建会回退到旧补丁并打警告（见「补丁来源与升级注意」）。
 
 > 想让内核自动保持最新，可以自己挂 cron：检查有新 stable 就跑 `--install-kernel` 然后重启。本项目不内置这个动作——自动重装内核并重启的脚本一旦出错就是机器失联，这个决定应该由人来做。
+
+---
+
+## 内核瘦身与防变砖机制
+
+### 1. 面向云服务器/VPS 的内核精简瘦身
+
+在完整保留 KVM（VirtIO）、Hyper-V / Azure（12 项核心驱动矩阵）、Xen、VMware 等云环境虚拟化网络与存储驱动的前提下，编译期通过 `scripts/prepare-kernel-config.sh` 剥离了大量服务器用不到的桌面硬件模块：
+
+- **重型桌面独显/核显驱动**：禁用 `DRM_AMDGPU`、`DRM_RADEON`、`DRM_NOUVEAU`、`DRM_I915`、`DRM_XE`（保留 `DRM_HYPERV`、`DRM_VIRTIO_GPU`、`DRM_BOCHS`、`DRM_QXL` 等云控制台显示驱动）
+- **多媒体与音频子系统**：禁用 `SOUND`、`SND`（ALSA 声卡全系）、`MEDIA_SUPPORT`（摄像头与电视采集卡）
+- **无线与近场外设**：禁用 `WLAN`、`WIRELESS`、`BT`（蓝牙）、`NFC`、`HAMRADIO`、`INPUT_JOYSTICK`、`GAMEPORT`
+- **冗余架构与调试符号**：ARM64 禁用 `CPU_BIG_ENDIAN`；全架构禁用 `DEBUG_INFO`，大幅缩减 `.deb` 包体积与小内存机器 `initramfs` 占用
+
+### 2. DKMS 第三方内核模块兼容（保留 `.config`）
+
+Linux 主线 `scripts/package/install-extmod-build` 在制作 `linux-headers-*.deb` 时默认会删掉 `.config`（仅留 `include/config/auto.conf`），导致 WireGuard、ZFS 或网卡 DKMS 模块编译报错。本项目在打包前通过 `scripts/prepare-kernel-packaging.sh` 将完整 `.config` 注入 `linux-headers` 包并由 CI 强制校验。
+
+### 3. 安装期五道防变砖门禁与自动回滚
+
+`--install-kernel` 在真正替换内核与引导前，依次执行以下保护：
+
+1. **DKMS 兼容性预检**：扫描系统中已登记的 DKMS 模块，若存在损坏状态提前阻断；
+2. **安装包对与云平台配置门禁**：校验 `linux-image` 与 `linux-headers` 版本严格一致，并提取包内 `.config` 核验 VirtIO / Hyper-V 关键驱动是否齐备；
+3. **引导状态快照备份**：安装前自动备份 `/etc/default/grub` 与 `/boot/grub/grub.cfg`；
+4. **启动链完整性断言**：安装后校验 `/boot/vmlinuz-<ver>`、`/boot/initrd.img-<ver>` 与 `grub.cfg` 菜单项；在 Hyper-V / Azure 机器上额外通过 `lsinitramfs` 核验 `hv_vmbus` / `hv_storvsc` / `hv_netvsc` 已打入 `initramfs`；
+5. **失败自动回滚**：一旦 `dpkg` 安装或启动链校验失败，自动卸载半成品内核包、恢复备份的 GRUB 状态并重新生成引导配置。
 
 ---
 
@@ -307,16 +339,21 @@ net.ipv4.tcp_notsent_lowat = 16384
 
 ## 内核安全与 CVE 探测
 
-针对近期 Linux 网络栈安全事件提供纵深防御：
+针对近期 Linux 网络栈安全事件（CVE-2026-31431 与 Dirty Frag）提供编译期 + 运行期纵深防御：
+
+**编译期根源裁剪（v2.1.0+ 内核自带）**
+
+本项目编译的内核已在构建期直接关闭 `CONFIG_CRYPTO_USER_API_AEAD`、`CONFIG_XFRM_ESP`、`CONFIG_INET_ESP`、`CONFIG_INET6_ESP`、`CONFIG_AF_RXRPC` 与 `CONFIG_RXKAD`，并由 CI 门禁强制断言，从根源消除对应攻击面。
 
 **独立 CVE 探测器**
 
 ```bash
-python3 cve_2026_31431_detector.py
+python3 cve_2026_31431_detector.py          # 人类可读报告
+python3 cve_2026_31431_detector.py --json   # JSON 结构化报告（便于自动化巡检）
 ```
 
 - 含主动装载防御，避免探测动作本身触发内核自动加载漏洞模块；
-- 精准检测 `esp4` / `esp6` / `rxrpc` / `algif_aead`，即使缺少 `/boot/config` 也按运行态真实研判。
+- 精准检测 `esp4` / `esp6` / `rxrpc` / `algif_aead`，即使缺少 `/boot/config` 也按运行态与 `/proc/config.gz` 真实研判。
 
 **安全缓解指令**
 
@@ -365,6 +402,10 @@ sudo bash /tmp/bbr.sh --tune=apac
 美西 VPS，500 Mbps 带宽，国内访问 RTT 约 180ms：
 
 ```bash
+# 方式一：命令行直接传参（适合自动化脚本）
+sudo bash /tmp/bbr.sh --tune=smart --bw=500 --rtt=180
+
+# 方式二：交互式输入
 sudo bash /tmp/bbr.sh --tune=smart
 # 提示输入带宽时填 500，延迟填 180
 ```
@@ -463,25 +504,24 @@ BBR_REPO="你的用户名/bbr-v3-pro" sudo bash /tmp/bbr.sh --install-kernel
 ### 本地脱机构建
 
 ```bash
-# 1. 克隆内核源码（以 7.2.y 为例，仓库需有对应版本的 patches/bbrv3-linux-X.Y.patch）
-git clone --depth=1 --branch linux-7.2.y https://github.com/gregkh/linux.git kernel/linux
+# 1. 使用内置源码检出脚本拉取精确版本标签并校验 Makefile（以 7.3.1 为例）
+bash scripts/kernel-source.sh checkout 7.3.1 kernel/linux
 cd kernel/linux
 
 # 2. 应用 BBRv3 移植补丁
 bash ../../scripts/apply-bbrv3-port.sh
 
-# 3. 准备编译配置（自动注入调优策略并校验 12 项 Hyper-V 驱动）
+# 3. 准备编译配置（自动注入调优策略、精简冗余驱动并校验 12 项 Hyper-V 驱动）
 bash ../../scripts/prepare-kernel-config.sh x86_64   # ARM64 机器传 arm64
 
-# 4. 多核并行编译，产出 Debian 安装包
+# 4. 注入 linux-headers .config 打包钩子（保障第三方 DKMS 模块兼容）
+bash ../../scripts/prepare-kernel-packaging.sh
+
+# 5. 多核并行编译，产出 Debian 安装包
 make bindeb-pkg -j$(nproc) LOCALVERSION=-bbrv3 KDEB_COMPRESS=gzip skipdbg=true
 ```
 
-> **大版本刚发布时取不到源码？** 上游 `git.kernel.org` 的 `linux-X.Y.y` 分支通常在发版当晚就建好了（指向该版本的发布提交），但 GitHub 镜像 `gregkh/linux` 要等该分支上有新提交被推送后才会出现——也就是第一个稳定补丁队列（X.Y.1）开始推进的时候，按历史规律约在发版后 5~11 天。例如 7.3 于 2026-10-18 发布，kernel.org 上已有 `linux-7.3.y`，而 GitHub 镜像仍只到 `linux-7.2.y`。此时改用 torvalds 仓库的同版本发布标签即可：
->
-> ```bash
-> git clone --depth=1 --branch v7.3 https://github.com/torvalds/linux.git kernel/linux
-> ```
+> `scripts/kernel-source.sh` 会自动按 `git.kernel.org` → `github.com/gregkh/linux` → `github.com/torvalds/linux` 顺序回退检出精确的 `vX.Y.Z` / `vX.Y` 标签，无需手动区分大版本首发期与稳定分支镜像延迟。
 
 ### 补丁来源与升级注意
 
@@ -542,7 +582,7 @@ bbr --version
 ## 已知限制
 
 1. **主要验证环境**：Debian 12 / Ubuntu 24.04，x86_64 与 ARM64，主流 KVM / Hyper-V 云平台。极小内存（< 128MB）尚未做深度压测。
-2. **不支持回退到历史旧版内核**：脚本默认安装最新 Release。需要旧版请到 Releases 页面手动下载 `.deb`。
+2. **安装指定历史版本内核**：默认 `--install-kernel` 安装最新 Release；如需安装本仓库已发布的指定历史版本，可使用 `--install-kernel=<ver>`（例如 `--install-kernel=7.3.1`）。
 3. **不支持非 Debian 系发行版**（RHEL、Alpine、Arch 等）。
 
 ### 已实机验证的功能
@@ -550,16 +590,17 @@ bbr --version
 | 功能 | 验证内容 |
 |---|---|
 | `--status` | 状态体检、版本展示、准确区分 BBRv3 / BBRv1 |
-| `--install-kernel` | 下载、哈希比对、安装路径、同版本拦截 |
+| `--install-kernel[=<ver>]` | 最新或指定版本下载、SHA256 强校验、DKMS/云配置预检、引导备份与自动回滚 |
 | `--apply-bbr` | 算法与队列切换、持久化保存 |
 | 菜单 4 | 切换 CAKE，网卡出口实际生效队列回读 |
 | `--tune=ai-gateway` | 全栈调优、内存分档、防 OOM 页面池钳位 |
-| `--tune=apac` | 亚太预设、BBR+FQ 联动与回读闭环 |
-| `--tune=smart` | BDP 动态公式计算与参数注入 |
+| `--tune=apac` | 亚太预设、防 OOM 水位、BBR+FQ 联动与回读闭环 |
+| `--tune=smart` | BDP 动态公式计算与参数注入（支持 `--bw` / `--rtt` 非交互传参） |
+| `--disable-ipv6` / `--restore-ipv6` | SSH IPv6 会话防失联拦截、原状态备份与无损恢复 |
 | `--mitigate-cve` | 显式写入安全规则，菜单交互与卸载解耦 |
 | `--check-ports` | 端口占用探测 |
 | `--clean` | 清空配置 + 运行态残留提醒 |
-| `--uninstall-kernel` | 防变砖断言（识别到官方内核才允许卸载） |
+| `--uninstall-kernel` | 防变砖断言（识别 `ii`/`hi` 状态官方备用内核才允许卸载） |
 | 重启持久化 | 重启后参数与配置自动恢复 |
 | 快捷命令 | 自更新与 `--version` 正常 |
 
